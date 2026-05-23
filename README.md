@@ -1,6 +1,8 @@
 # AirReceive
 
-AirReceive is an Android app for cross-device photo transfer—similar to Apple’s AirDrop. It can **receive** photos on Android (from iPhone browsers or other devices) and **send** photos from Android to an iPhone via the public gateway.
+AirReceive is an Android app for cross-device photo transfer—similar to Apple’s AirDrop. It can **receive** photos on Android (from iPhone browsers or other devices) and **send** photos from Android to an iPhone via the public gateway. 
+
+Distinctive to existing file sharing services, you do not need to be on the same network between your files, even with people not in your district, the same country and even beyond the seas!
 
 This repo contains two parts that work together:
 
@@ -42,17 +44,16 @@ The app uses a bottom navigation bar:
 
 | Tab | Purpose |
 |-----|---------|
-| **Home** | Start/stop receiver, local Wi‑Fi QR link, active transfers |
+| **Home** (gallery) | Default screen — view, share, and save received photos |
 | **Send** | Pick an online receiver and send photos or files (gateway mode) |
-| **Gallery** | View, share, and save received photos |
-| **Settings** | Free hosted gateway, custom Render URL, or local Wi‑Fi only |
+| **Settings** | Start/stop receiver, gateway URL, local Wi‑Fi QR, active transfers |
 
 ### Gateway URLs
 
 | URL | Purpose |
 |-----|---------|
 | `https://your-app.onrender.com/` | **Hub** — choose Send to Android, Send to device, or Receive |
-| `https://your-app.onrender.com/to-android` | Send a photo **to Android** from any browser |
+| `https://your-app.onrender.com/to-android` | Send a photo **to a chosen Android phone** (device picker) |
 | `https://your-app.onrender.com/send` | Send files **to a chosen PC or phone** (device picker) |
 | `https://your-app.onrender.com/receive` | **Receive** files (keep the tab open; set a device name when prompted) |
 
@@ -125,7 +126,7 @@ Uploaded files are stored under `/tmp/airreceive_uploads` and expire after about
 
 1. Install and open **AirReceive** on your Android phone.
 2. **Same Wi‑Fi:** Share the app’s local URL or QR code; sender uploads from their browser.
-3. **Different networks:** Deploy `server.js`, paste the gateway URL into the app **Settings** tab; sender uses `https://your-gateway/to-android` in a browser.
+3. **Different networks:** Deploy `server.js`, paste the gateway URL into the app **Settings** tab, tap **Start Receiver**; sender uses `https://your-gateway/to-android`, picks your phone, and uploads.
 
 **Send to iPhone or PC (batch)**
 
@@ -141,12 +142,13 @@ Uploaded files are stored under `/tmp/airreceive_uploads` and expire after about
 
 Received photos appear in the Android in-app gallery and can be saved to the device photo library. Photos sent to a receiver are saved from the browser on that device.
 
-## Limitations
+## Limitations and mitigations
 
-- `/receive` requires the tab to stay open; background tabs may drop the WebSocket.
-- PC **Download all** triggers multiple browser downloads (settings may ask once per file).
-- Device names on a shared gateway are visible to anyone on that URL (no PIN or pairing in this version).
-- No pairing or encryption beyond HTTPS; anyone with the gateway URL can connect (same as before).
-- HEIC images from Android may not preview correctly in all Safari versions; JPEG is most reliable.
-- Saving to Photos requires one Share sheet confirmation per batch (Safari security); it is not fully automatic.
-- If batch share fails, tap individual thumbnails on `/receive` to save one photo at a time.
+| Topic | Mitigation in app | Still applies |
+|-------|-------------------|---------------|
+| `/receive` tab in background | Warning banner, faster reconnect when you return, optional **Keep screen awake**, WebSocket ping | OS may still suspend background tabs — keep `/receive` visible when expecting files |
+| PC save many files | **Save all to folder** (Chrome/Edge) writes to one directory; **Download all** still available | Browsers without directory picker may prompt per file |
+| HEIC previews | `/receive` decodes HEIC to JPEG in-browser for thumbnails | Some edge cases may still fail |
+| iOS Save to Photos | Share sheet per batch (Apple requirement); per-thumbnail fallback | Not fully silent/automatic |
+| Shared public gateway | Use your own private Render URL for fewer strangers on the same host | Device names are visible on a shared gateway URL |
+| Security | HTTPS in transit | No end-to-end encryption or room PIN in this version |

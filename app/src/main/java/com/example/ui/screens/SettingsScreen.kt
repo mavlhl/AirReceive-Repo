@@ -6,6 +6,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -39,7 +40,12 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.ActiveTransferCard
 import com.example.GatewayOptionRow
+import com.example.SendToIphoneSetupCard
+import com.example.ServerStatusCard
+import com.example.SharePortalPanel
+import com.example.ui.viewmodel.ActiveTransfer
 import com.example.ui.viewmodel.AirReceiveViewModel
 import com.example.ui.viewmodel.GatewaySelection
 import com.example.ui.viewmodel.ServerState
@@ -47,9 +53,12 @@ import com.example.ui.viewmodel.ServerState
 @Composable
 fun SettingsScreen(
     state: ServerState,
+    onToggleServer: () -> Unit,
+    onRefreshNetwork: () -> Unit,
     onApplyHostedGateway: () -> Unit,
     onClearGateway: () -> Unit,
-    onUpdateCustomUrl: (String) -> Unit
+    onUpdateCustomUrl: (String) -> Unit,
+    onOpenSendTab: () -> Unit
 ) {
     var showCustomField by remember(state.gatewaySelection) {
         mutableStateOf(state.gatewaySelection == GatewaySelection.CUSTOM)
@@ -64,7 +73,8 @@ fun SettingsScreen(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp)
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
             text = "SETTINGS",
@@ -73,7 +83,18 @@ fun SettingsScreen(
             letterSpacing = 1.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
         )
-        Spacer(modifier = Modifier.height(12.dp))
+
+        ServerStatusCard(
+            state = state,
+            onToggleServer = onToggleServer,
+            onRefreshNetwork = onRefreshNetwork,
+            onOpenSettings = { },
+            showGatewaySettingsLink = false
+        )
+
+        if (state.isRunning && state.serverUrl.isNotEmpty() && state.customUrl.isEmpty()) {
+            SharePortalPanel(url = state.serverUrl)
+        }
 
         Card(
             modifier = Modifier.fillMaxWidth(),
@@ -168,6 +189,20 @@ fun SettingsScreen(
                         )
                     }
                 }
+            }
+        }
+
+        if (state.customUrl.isEmpty()) {
+            SendToIphoneSetupCard(onOpenSettings = onOpenSendTab)
+        }
+
+        AnimatedVisibility(
+            visible = state.activeTransfer != null,
+            enter = fadeIn() + expandVertically(),
+            exit = fadeOut() + shrinkVertically()
+        ) {
+            state.activeTransfer?.let { transfer: ActiveTransfer ->
+                ActiveTransferCard(transfer = transfer)
             }
         }
     }

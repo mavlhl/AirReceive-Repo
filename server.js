@@ -923,6 +923,37 @@ app.get('/to-android', (req, res) => {
       color: var(--accent);
       background: rgba(16, 185, 129, 0.1);
     }
+    label.device-label { font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 6px; text-align: left; }
+    .device-list {
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 8px;
+      margin-bottom: 16px;
+      max-height: 160px;
+      overflow-y: auto;
+      text-align: left;
+    }
+    .device-option {
+      display: flex;
+      align-items: center;
+      padding: 10px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .device-option:hover { background: rgba(16, 185, 129, 0.08); }
+    .device-option input { margin-right: 10px; }
+    .device-empty { color: var(--text-muted); font-size: 13px; padding: 12px; text-align: center; }
+    .refresh-btn {
+      background: transparent;
+      border: 1px solid var(--border-color);
+      color: var(--accent);
+      padding: 6px 12px;
+      border-radius: 100px;
+      font-size: 12px;
+      cursor: pointer;
+      margin-bottom: 8px;
+    }
+    .drop-zone.disabled { opacity: 0.45; pointer-events: none; }
   </style>
 </head>
 <body>
@@ -945,7 +976,13 @@ app.get('/to-android', (req, res) => {
         <span id="statusText">Checking Connection...</span>
       </div>
 
-      <div class="drop-zone" id="dropZone">
+      <label class="device-label">Send to Android device</label>
+      <button type="button" class="refresh-btn" id="refreshPhonesBtn">Refresh list</button>
+      <div class="device-list" id="phoneList">
+        <div class="device-empty">Looking for online phones...</div>
+      </div>
+
+      <div class="drop-zone disabled" id="dropZone">
         <div class="drop-zone-text">
           <strong>Select a Photo or Drag & Drop</strong>
           <span>tap anywhere to browse JPEG, PNG, or webp</span>
@@ -979,7 +1016,7 @@ app.get('/to-android', (req, res) => {
         </div>
         <ol>
           <li>Open the <strong>AirReceive</strong> app on your Android Phone.</li>
-          <li>Tap the <strong>Gear/Settings icon</strong> on the status card.</li>
+          <li>Open the <strong>Settings</strong> tab in AirReceive and enable the gateway.</li>
           <li>Paste this full website URL in the text field:</li>
           <li><code><span id="urlPlaceholder">https://your-app.onrender.com</span></code></li>
           <li>Click the checkmark to save. Your status will instantly show <strong>Ready</strong>!</li>
@@ -1006,12 +1043,64 @@ app.get('/to-android', (req, res) => {
     const statusBadge = document.getElementById('statusBadge');
     const statusText = document.getElementById('statusText');
     const urlPlaceholder = document.getElementById('urlPlaceholder');
+    const phoneListEl = document.getElementById('phoneList');
+    const refreshPhonesBtn = document.getElementById('refreshPhonesBtn');
 
-    // Display current address
+    let selectedPhoneId = null;
+
     urlPlaceholder.textContent = window.location.origin;
 
-    // Direct click trigger on drag zone
-    dropZone.addEventListener('click', () => fileInput.click());
+    function updateDropZoneEnabled() {
+      dropZone.classList.toggle('disabled', !selectedPhoneId);
+    }
+
+    async function refreshPhones() {
+      try {
+        const res = await fetch('/api/devices?role=phone');
+        const data = await res.json();
+        const phones = data.phones || [];
+        if (phones.length === 0) {
+          phoneListEl.innerHTML = '<div class="device-empty">No phones online. Open AirReceive on Android, enable gateway in <strong>Settings</strong>, and keep the app in the foreground.</div>';
+          selectedPhoneId = null;
+          updateDropZoneEnabled();
+          return;
+        }
+        phoneListEl.innerHTML = '';
+        phones.forEach((dev) => {
+          const row = document.createElement('label');
+          row.className = 'device-option';
+          const radio = document.createElement('input');
+          radio.type = 'radio';
+          radio.name = 'targetPhone';
+          radio.value = dev.id;
+          if (dev.id === selectedPhoneId) radio.checked = true;
+          radio.addEventListener('change', () => {
+            selectedPhoneId = dev.id;
+            updateDropZoneEnabled();
+          });
+          const text = document.createElement('span');
+          text.textContent = dev.displayName + ' — online';
+          row.appendChild(radio);
+          row.appendChild(text);
+          phoneListEl.appendChild(row);
+        });
+        if (!selectedPhoneId && phones.length === 1) {
+          selectedPhoneId = phones[0].id;
+          phoneListEl.querySelector('input').checked = true;
+          updateDropZoneEnabled();
+        }
+      } catch (e) {
+        phoneListEl.innerHTML = '<div class="device-empty">Could not load phone list.</div>';
+      }
+    }
+
+    refreshPhonesBtn.addEventListener('click', refreshPhones);
+    setInterval(refreshPhones, 3000);
+    refreshPhones();
+
+    dropZone.addEventListener('click', () => {
+      if (selectedPhoneId) fileInput.click();
+    });
 
     // File drag effects
     dropZone.addEventListener('dragover', (e) => {
@@ -1037,6 +1126,10 @@ app.get('/to-android', (req, res) => {
     });
 
     function handleFileSelect(file) {
+      if (!selectedPhoneId) {
+        showError('Select an Android device first.');
+        return;
+      }
       if (!file.type.startsWith('image/')) {
         showError('Only image files are supported in standard view mode.');
         return;
@@ -1065,6 +1158,7 @@ app.get('/to-android', (req, res) => {
       const formData = new FormData();
       formData.append('file', file);
       formData.append('target', 'phone');
+      formData.append('targetDeviceId', selectedPhoneId);
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/upload', true);
@@ -1085,11 +1179,18 @@ app.get('/to-android', (req, res) => {
           try {
             const result = JSON.parse(xhr.responseText);
             if (result.phoneRelayed === false) {
-              showError('Upload reached the server, but no Android phone is connected. Open AirReceive, save your gateway URL, and keep the app in the foreground until status shows Ready.');
+              showError('Upload reached the server, but the phone is not connected. Refresh the device list and try again.');
               return;
             }
           } catch (e) { /* legacy response */ }
           showSuccess();
+        } else if (xhr.status === 404) {
+          let err = 'Selected phone is offline.';
+          try {
+            const j = JSON.parse(xhr.responseText);
+            if (j.error) err = j.error;
+          } catch (e) { /* ignore */ }
+          showError(err + ' Refresh the list and pick another device.');
         } else {
           showError('Server rejected file upload: ' + xhr.responseText);
         }
@@ -1689,6 +1790,37 @@ app.get('/receive', (req, res) => {
       text-align: left;
     }
     .file-row-meta { font-size: 11px; color: var(--text-muted); }
+    .visibility-banner {
+      display: none;
+      margin: 12px 0;
+      padding: 10px 14px;
+      border-radius: 10px;
+      background: rgba(251, 191, 36, 0.12);
+      border: 1px solid rgba(251, 191, 36, 0.35);
+      color: #fcd34d;
+      font-size: 12px;
+      line-height: 1.4;
+      text-align: left;
+    }
+    .visibility-banner.visible { display: block; }
+    .utility-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      margin: 12px 0;
+    }
+    .utility-btn {
+      padding: 8px 14px;
+      border-radius: 100px;
+      border: 1px solid var(--border-color);
+      background: transparent;
+      color: var(--primary);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .utility-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     .gateway-nav {
       display: flex;
       flex-wrap: wrap;
@@ -1726,6 +1858,14 @@ app.get('/receive', (req, res) => {
       </div>
       <p class="device-identity" id="deviceIdentity" style="display:none;">You are: <strong id="myDeviceName"></strong></p>
 
+      <div class="visibility-banner" id="visibilityBanner">
+        This tab is in the background — transfers may be missed. Return here to stay connected.
+      </div>
+
+      <div class="utility-row">
+        <button type="button" class="utility-btn" id="wakeLockBtn">Keep screen awake</button>
+      </div>
+
       <p class="waiting" id="waitingText">Waiting for files...</p>
 
       <div class="batch-wrap" id="batchWrap">
@@ -1735,10 +1875,11 @@ app.get('/receive', (req, res) => {
           <button type="button" class="save-all-btn" id="saveAllBtn" disabled>Save all to Photos</button>
           <p class="btn-subtitle">iPhone / iPad — opens Share sheet; choose <strong>Save Images</strong> or <strong>Add to Photos</strong> (Safari recommended)</p>
           <button type="button" class="download-all-btn" id="downloadAllBtn" disabled>Download all files</button>
-          <p class="btn-subtitle">PC / Mac — saves each file to your Downloads folder (browser may ask once per file)</p>
+          <p class="btn-subtitle" id="downloadHint">PC / Mac — use Save to folder (Chrome/Edge) or download files one by one</p>
+          <button type="button" class="download-all-btn" id="saveFolderBtn" disabled style="display:none; margin-top:8px;">Save all to folder</button>
         </div>
         <p class="save-hint" id="nonImageHint" style="display:none;">This batch includes non-image files — use Download all (Save to Photos is for images only).</p>
-        <p class="save-hint" id="fallbackHint" style="display:none;">On iPhone, tap a thumbnail to save one photo at a time via Share.</p>
+        <p class="save-hint" id="fallbackHint" style="display:none;">On iPhone, tap a thumbnail to save one photo at a time via Share. If batch share fails, try individual thumbnails.</p>
       </div>
 
       <div class="toast-success" id="successToast"></div>
@@ -1756,6 +1897,7 @@ app.get('/receive', (req, res) => {
       </div>
     </div>
   </div>
+  <script src="https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js"></script>
   <script>
     const statusBadge = document.getElementById('statusBadge');
     const statusText = document.getElementById('statusText');
@@ -1771,10 +1913,72 @@ app.get('/receive', (req, res) => {
     const nonImageHint = document.getElementById('nonImageHint');
     const deviceIdentity = document.getElementById('deviceIdentity');
     const myDeviceNameEl = document.getElementById('myDeviceName');
+    const visibilityBanner = document.getElementById('visibilityBanner');
+    const wakeLockBtn = document.getElementById('wakeLockBtn');
+    const saveFolderBtn = document.getElementById('saveFolderBtn');
+    const downloadHint = document.getElementById('downloadHint');
     document.getElementById('originCode').textContent = window.location.origin;
 
     const DEVICE_NAME_KEY = 'airreceive_device_name';
     const DEVICE_ID_KEY = 'airreceive_device_id';
+
+    let wakeLock = null;
+    let pingInterval = null;
+
+    if ('showDirectoryPicker' in window) {
+      saveFolderBtn.style.display = 'block';
+      downloadHint.textContent = 'PC / Mac — Save to folder picks one directory (recommended on Chrome/Edge)';
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        visibilityBanner.classList.add('visible');
+      } else {
+        visibilityBanner.classList.remove('visible');
+        if (ws && ws.readyState !== WebSocket.OPEN) {
+          connect();
+        }
+      }
+    });
+
+    wakeLockBtn.addEventListener('click', async () => {
+      try {
+        if (wakeLock) {
+          await wakeLock.release();
+          wakeLock = null;
+          wakeLockBtn.textContent = 'Keep screen awake';
+          return;
+        }
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+          wakeLockBtn.textContent = 'Release wake lock';
+          wakeLock.addEventListener('release', () => {
+            wakeLock = null;
+            wakeLockBtn.textContent = 'Keep screen awake';
+          });
+        } else {
+          showError('Wake Lock not supported in this browser.');
+        }
+      } catch (e) {
+        showError('Could not enable wake lock: ' + (e.message || 'denied'));
+      }
+    });
+
+    async function previewBlob(blob, name, type) {
+      const lower = (name || '').toLowerCase();
+      const isHeic = (type && (type.includes('heic') || type.includes('heif'))) ||
+        lower.endsWith('.heic') || lower.endsWith('.heif');
+      if (isHeic && typeof heic2any === 'function') {
+        try {
+          const converted = await heic2any({ blob, toType: 'image/jpeg', quality: 0.85 });
+          const out = Array.isArray(converted) ? converted[0] : converted;
+          return { blob: out, type: 'image/jpeg', name: name.replace(/\\.heic$/i, '.jpg').replace(/\\.heif$/i, '.jpg') };
+        } catch (e) {
+          console.warn('HEIC decode failed', e);
+        }
+      }
+      return { blob, type, name };
+    }
 
     function getDeviceName() {
       let name = localStorage.getItem(DEVICE_NAME_KEY);
@@ -1843,6 +2047,7 @@ app.get('/receive', (req, res) => {
       const allImages = ready && cachedBatchFiles.every((e) => isImageMime(e.type, e.name));
       saveAllBtn.disabled = !ready || !allImages;
       downloadAllBtn.disabled = !ready;
+      saveFolderBtn.disabled = !ready;
       nonImageHint.style.display = ready && !allImages ? 'block' : 'none';
     }
 
@@ -1921,6 +2126,36 @@ app.get('/receive', (req, res) => {
       }
     }
 
+    async function saveAllToFolder() {
+      if (cachedBatchFiles.length === 0) {
+        showError('No files loaded yet.');
+        return;
+      }
+      if (!('showDirectoryPicker' in window)) {
+        showError('Save to folder requires Chrome or Edge on desktop.');
+        return;
+      }
+      saveFolderBtn.disabled = true;
+      try {
+        const dirHandle = await window.showDirectoryPicker();
+        const count = cachedBatchFiles.length;
+        for (const entry of cachedBatchFiles) {
+          const fileHandle = await dirHandle.getFileHandle(entry.name, { create: true });
+          const writable = await fileHandle.createWritable();
+          await writable.write(entry.blob);
+          await writable.close();
+        }
+        await cleanupBatch();
+        showSuccess('Saved ' + count + ' file(s) to the selected folder.');
+        saveFolderBtn.textContent = 'Saved';
+      } catch (e) {
+        if (e.name !== 'AbortError') {
+          showError('Save to folder failed: ' + (e.message || 'Unknown error'));
+        }
+        saveFolderBtn.disabled = false;
+      }
+    }
+
     async function downloadAllImages() {
       if (cachedBatchFiles.length === 0) {
         showError('No photos loaded yet.');
@@ -1944,7 +2179,7 @@ app.get('/receive', (req, res) => {
           }
         }
         await cleanupBatch();
-        showSuccess('Downloaded ' + count + ' image(s). Check your Downloads folder.');
+        showSuccess('Downloaded ' + count + ' file(s). Check your Downloads folder.');
         downloadAllBtn.textContent = 'Downloaded';
       } catch (e) {
         showError('Download failed: ' + (e.message || 'Unknown error'));
@@ -1954,9 +2189,17 @@ app.get('/receive', (req, res) => {
 
     saveAllBtn.addEventListener('click', saveAllToPhotos);
     downloadAllBtn.addEventListener('click', downloadAllImages);
+    saveFolderBtn.addEventListener('click', saveAllToFolder);
 
     function connect() {
-      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      if (ws) {
+        try { ws.close(); } catch (e) { /* ignore */ }
+        ws = null;
+      }
 
       ws = new WebSocket(wsUrl());
 
@@ -1968,11 +2211,23 @@ app.get('/receive', (req, res) => {
           deviceId: localStorage.getItem(DEVICE_ID_KEY) || undefined
         };
         ws.send(JSON.stringify(reg));
+        if (pingInterval) clearInterval(pingInterval);
+        pingInterval = setInterval(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'PING' }));
+          }
+        }, 25000);
       };
 
       ws.onclose = () => {
         setConnected(false);
-        reconnectTimer = setTimeout(connect, 5000);
+        if (pingInterval) {
+          clearInterval(pingInterval);
+          pingInterval = null;
+        }
+        if (!document.hidden) {
+          reconnectTimer = setTimeout(connect, 3000);
+        }
       };
 
       ws.onerror = () => setConnected(false);
@@ -1984,19 +2239,23 @@ app.get('/receive', (req, res) => {
           try {
             const res = await fetch('/download/' + file.id + '?keep=1');
             if (!res.ok) continue;
-            const blob = await res.blob();
+            let blob = await res.blob();
             const name = file.name || 'photo.jpg';
-            const type = file.mimeType || blob.type || mimeFromName(name);
-            const entry = { name, blob, type, size: file.size || blob.size };
+            let type = file.mimeType || blob.type || mimeFromName(name);
+            const preview = await previewBlob(blob, name, type);
+            blob = preview.blob;
+            type = preview.type;
+            const displayName = preview.name || name;
+            const entry = { name: displayName, blob, type, size: file.size || blob.size };
             cachedBatchFiles.push(entry);
 
-            if (!isImageMime(type, name)) {
+            if (!isImageMime(type, displayName)) {
               const row = document.createElement('div');
               row.className = 'file-row';
               const info = document.createElement('div');
               const nameEl = document.createElement('div');
               nameEl.className = 'file-row-name';
-              nameEl.textContent = name;
+              nameEl.textContent = displayName;
               const meta = document.createElement('div');
               meta.className = 'file-row-meta';
               meta.textContent = formatBytes(entry.size);
@@ -2006,7 +2265,7 @@ app.get('/receive', (req, res) => {
               dl.className = 'thumb-dl';
               dl.textContent = 'Download';
               dl.href = URL.createObjectURL(blob);
-              dl.download = name;
+              dl.download = displayName;
               row.appendChild(info);
               row.appendChild(dl);
               thumbGrid.appendChild(row);
@@ -2017,24 +2276,24 @@ app.get('/receive', (req, res) => {
             wrap.className = 'thumb-item';
             const img = document.createElement('img');
             img.src = URL.createObjectURL(blob);
-            img.alt = name;
+            img.alt = displayName;
             wrap.appendChild(img);
 
             if (usePerThumbDownload()) {
-              wrap.title = 'Download ' + name;
+              wrap.title = 'Download ' + displayName;
               const dl = document.createElement('a');
               dl.className = 'thumb-dl';
               dl.textContent = 'Download';
               dl.href = URL.createObjectURL(blob);
-              dl.download = name;
+              dl.download = displayName;
               dl.addEventListener('click', (e) => e.stopPropagation());
               wrap.appendChild(dl);
             } else {
               wrap.title = 'Tap to save this photo';
               wrap.addEventListener('click', async () => {
                 try {
-                  const ok = await shareOneFile({ name, blob, type });
-                  if (ok) showSuccess('Use Save Images on the Share sheet for ' + name);
+                  const ok = await shareOneFile({ name: displayName, blob, type });
+                  if (ok) showSuccess('Use Save Images on the Share sheet for ' + displayName);
                   else showError('Share not supported. Try Safari.');
                 } catch (e) {
                   if (e.name !== 'AbortError') showError(e.message || 'Share failed');

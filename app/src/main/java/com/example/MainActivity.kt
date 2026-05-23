@@ -170,8 +170,9 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
 
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = navBackStackEntry?.destination?.route ?: AppRoute.Home
+    val currentRoute = navBackStackEntry?.destination?.route ?: AppRoute.Gallery
     val needsGatewaySetup = serverState.customUrl.isEmpty()
+    val showReceiverHint = !serverState.isRunning
 
     Scaffold(
         topBar = {
@@ -206,9 +207,17 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
         bottomBar = {
             NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
                 NavigationBarItem(
-                    selected = currentRoute == AppRoute.Home,
-                    onClick = { navController.navigate(AppRoute.Home) { launchSingleTop = true } },
-                    icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
+                    selected = currentRoute == AppRoute.Gallery,
+                    onClick = { navController.navigate(AppRoute.Gallery) { launchSingleTop = true } },
+                    icon = {
+                        if (photoList.isNotEmpty()) {
+                            BadgedBox(badge = { Badge { Text("${photoList.size.coerceAtMost(99)}") } }) {
+                                Icon(Icons.Default.Home, contentDescription = "Home")
+                            }
+                        } else {
+                            Icon(Icons.Default.Home, contentDescription = "Home")
+                        }
+                    },
                     label = { Text("Home") }
                 )
                 NavigationBarItem(
@@ -226,23 +235,17 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
                     label = { Text("Send") }
                 )
                 NavigationBarItem(
-                    selected = currentRoute == AppRoute.Gallery,
-                    onClick = { navController.navigate(AppRoute.Gallery) { launchSingleTop = true } },
-                    icon = {
-                        if (photoList.isNotEmpty()) {
-                            BadgedBox(badge = { Badge { Text("${photoList.size.coerceAtMost(99)}") } }) {
-                                Icon(Icons.Default.Collections, contentDescription = "Gallery")
-                            }
-                        } else {
-                            Icon(Icons.Default.Collections, contentDescription = "Gallery")
-                        }
-                    },
-                    label = { Text("Gallery") }
-                )
-                NavigationBarItem(
                     selected = currentRoute == AppRoute.Settings,
                     onClick = { navController.navigate(AppRoute.Settings) { launchSingleTop = true } },
-                    icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                    icon = {
+                        if (showReceiverHint) {
+                            BadgedBox(badge = { Badge { Text("") } }) {
+                                Icon(Icons.Default.Settings, contentDescription = "Settings")
+                            }
+                        } else {
+                            Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        }
+                    },
                     label = { Text("Settings") }
                 )
             }
@@ -302,7 +305,8 @@ fun ServerStatusCard(
     state: ServerState,
     onToggleServer: () -> Unit,
     onRefreshNetwork: () -> Unit,
-    onOpenSettings: () -> Unit
+    onOpenSettings: () -> Unit,
+    showGatewaySettingsLink: Boolean = true
 ) {
     val transition = rememberInfiniteTransition(label = "pulse_state")
     val alphaAnim by transition.animateFloat(
@@ -381,26 +385,29 @@ fun ServerStatusCard(
                 }
             }
 
-            TextButton(
-                onClick = onOpenSettings,
-                modifier = Modifier.padding(top = 8.dp)
-            ) {
-                Text(
-                    text = "Gateway settings",
-                    color = MaterialTheme.colorScheme.primary,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Icon(
-                    imageVector = Icons.Default.KeyboardArrowRight,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.size(18.dp)
-                )
+            if (showGatewaySettingsLink) {
+                TextButton(
+                    onClick = onOpenSettings,
+                    modifier = Modifier.padding(top = 8.dp)
+                ) {
+                    Text(
+                        text = "Gateway settings",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                Spacer(modifier = Modifier.height(8.dp))
+            } else {
+                Spacer(modifier = Modifier.height(8.dp))
             }
-
-            Spacer(modifier = Modifier.height(8.dp))
 
             if (state.isRunning && state.serverUrl.isNotEmpty()) {
                 Box(
