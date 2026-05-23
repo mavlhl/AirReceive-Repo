@@ -2,9 +2,14 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const multer = require('multer');
+const archiver = require('archiver');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
+
+const MAX_BATCH_FILES = 20;
+const MAX_BATCH_BYTES = 100 * 1024 * 1024; // 100 MB
+const FILE_TTL_MS = 5 * 60 * 1000;
 
 const app = express();
 const server = http.createServer(app);
@@ -17,8 +22,10 @@ if (!fs.existsSync(UPLOAD_DIR)) {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 }
 
-// Memory map of active file transfers: fileId -> { name, path, size, mimeType, timestamp }
+// Memory map of active file transfers: fileId -> { id, name, path, size, mimeType, timestamp }
 const fileMap = new Map();
+// batchId -> { fileIds: string[], createdAt: number }
+const batchMap = new Map();
 
 // Track connected AirReceive phones and Safari receiver tabs
 const activePhones = new Set();
@@ -30,6 +37,42 @@ function broadcastToSockets(sockets, notification) {
       socket.send(notification);
     }
   }
+}
+
+function deleteFileEntry(fileId) {
+  const info = fileMap.get(fileId);
+  if (!info) return;
+  try {
+    if (fs.existsSync(info.path)) {
+      fs.unlinkSync(info.path);
+    }
+  } catch (err) {
+    console.error(`[Clean Error] Failed to delete ${info.path}`, err);
+  }
+  fileMap.delete(fileId);
+}
+
+function deleteBatch(batchId) {
+  const batch = batchMap.get(batchId);
+  if (!batch) return;
+  for (const fileId of batch.fileIds) {
+    deleteFileEntry(fileId);
+  }
+  batchMap.delete(batchId);
+}
+
+function registerUploadedFile(file) {
+  const fileId = file.filename.split('.')[0];
+  const fileInfo = {
+    id: fileId,
+    name: file.originalname,
+    path: file.path,
+    size: file.size,
+    mimeType: file.mimetype || 'image/jpeg',
+    timestamp: Date.now()
+  };
+  fileMap.set(fileId, fileInfo);
+  return fileInfo;
 }
 
 // Multer storage setup
@@ -45,20 +88,19 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage: storage });
 
-// Periodic cleanup of files older than 5 minutes
+// Periodic cleanup of files and batches older than 5 minutes
 setInterval(() => {
   const now = Date.now();
   for (const [id, info] of fileMap.entries()) {
-    if (now - info.timestamp > 5 * 60 * 1000) {
+    if (now - info.timestamp > FILE_TTL_MS) {
       console.log(`[Clean] Expired file id ${id} (${info.name}) deleted.`);
-      try {
-        if (fs.existsSync(info.path)) {
-          fs.unlinkSync(info.path);
-        }
-      } catch (err) {
-        console.error(`[Clean Error] Failed to delete ${info.path}`, err);
-      }
-      fileMap.delete(id);
+      deleteFileEntry(id);
+    }
+  }
+  for (const [batchId, batch] of batchMap.entries()) {
+    if (now - batch.createdAt > FILE_TTL_MS) {
+      console.log(`[Clean] Expired batch ${batchId} deleted.`);
+      deleteBatch(batchId);
     }
   }
 }, 60 * 1000);
@@ -79,18 +121,8 @@ app.post('/upload', upload.single('file'), (req, res) => {
     return res.status(400).json({ error: 'No file provided' });
   }
 
-  // Generate transfer details
-  const fileId = req.file.filename.split('.')[0];
-  const fileInfo = {
-    id: fileId,
-    name: req.file.originalname,
-    path: req.file.path,
-    size: req.file.size,
-    mimeType: req.file.mimetype || 'image/jpeg',
-    timestamp: Date.now()
-  };
-
-  fileMap.set(fileId, fileInfo);
+  const fileInfo = registerUploadedFile(req.file);
+  const fileId = fileInfo.id;
   const target = (req.body.target === 'receiver') ? 'receiver' : 'phone';
   console.log(`[Upload] File received: ${fileInfo.name} (${fileInfo.size} bytes). ID: ${fileId}, target: ${target}`);
 
@@ -133,9 +165,142 @@ app.post('/upload', upload.single('file'), (req, res) => {
   });
 });
 
-// Download route for the AirReceive phone app
+// Batch upload (Android -> iPhone)
+app.post('/upload/batch', upload.array('files', MAX_BATCH_FILES), (req, res) => {
+  const files = req.files;
+  if (!files || files.length === 0) {
+    return res.status(400).json({ error: 'No files provided' });
+  }
+
+  const totalBytes = files.reduce((sum, f) => sum + f.size, 0);
+  if (totalBytes > MAX_BATCH_BYTES) {
+    for (const f of files) {
+      try {
+        if (fs.existsSync(f.path)) fs.unlinkSync(f.path);
+      } catch (e) { /* ignore */ }
+    }
+    return res.status(413).json({
+      error: `Batch too large. Maximum total size is ${MAX_BATCH_BYTES / (1024 * 1024)} MB.`
+    });
+  }
+
+  const target = (req.body.target === 'receiver') ? 'receiver' : 'phone';
+  const batchId = uuidv4();
+  const fileIds = [];
+  const fileMeta = [];
+
+  for (const file of files) {
+    const fileInfo = registerUploadedFile(file);
+    fileIds.push(fileInfo.id);
+    fileMeta.push({
+      id: fileInfo.id,
+      name: fileInfo.name,
+      size: fileInfo.size,
+      mimeType: fileInfo.mimeType
+    });
+  }
+
+  batchMap.set(batchId, { fileIds, createdAt: Date.now() });
+  console.log(`[Batch] ${files.length} file(s), ${totalBytes} bytes, batchId=${batchId}, target=${target}`);
+
+  let phoneRelayed = false;
+  let receiverRelayed = false;
+
+  if (target === 'receiver') {
+    if (activeReceivers.size === 0) {
+      console.warn(`[Broadcast] No receiver browsers connected for batch.`);
+    } else {
+      const notification = JSON.stringify({
+        type: 'NOTIFY_BATCH',
+        batchId,
+        files: fileMeta,
+        count: fileMeta.length
+      });
+      broadcastToSockets(activeReceivers, notification);
+      receiverRelayed = true;
+      console.log(`[Broadcast] NOTIFY_BATCH sent to ${activeReceivers.size} receiver(s).`);
+    }
+  } else {
+    if (activePhones.size === 0) {
+      console.warn(`[Broadcast] No phones connected for batch.`);
+    } else {
+      for (const meta of fileMeta) {
+        const notification = JSON.stringify({
+          type: 'NOTIFY_UPLOAD',
+          id: meta.id,
+          name: meta.name,
+          size: meta.size,
+          mimeType: meta.mimeType,
+          batchId
+        });
+        broadcastToSockets(activePhones, notification);
+      }
+      phoneRelayed = true;
+    }
+  }
+
+  res.json({
+    success: true,
+    batchId,
+    count: fileMeta.length,
+    target,
+    phoneRelayed,
+    receiverRelayed
+  });
+});
+
+// Batch ZIP download (iPhone) — must be registered before /download/:id
+app.get('/download/batch/:batchId', (req, res) => {
+  let batchId = req.params.batchId;
+  if (batchId.endsWith('.zip')) {
+    batchId = batchId.slice(0, -4);
+  }
+
+  const batch = batchMap.get(batchId);
+  if (!batch) {
+    return res.status(404).send('Batch expired or not found.');
+  }
+
+  const entries = batch.fileIds
+    .map((id) => fileMap.get(id))
+    .filter((info) => info && fs.existsSync(info.path));
+
+  if (entries.length === 0) {
+    deleteBatch(batchId);
+    return res.status(404).send('Batch files not found on disk.');
+  }
+
+  console.log(`[Download] Streaming ZIP for batch ${batchId} (${entries.length} files)...`);
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', `attachment; filename="airreceive-${batchId.slice(0, 8)}.zip"`);
+
+  const archive = archiver('zip', { zlib: { level: 5 } });
+  archive.on('error', (err) => {
+    console.error('[Download Error] ZIP archive failed:', err);
+    if (!res.headersSent) {
+      res.status(500).end();
+    }
+  });
+
+  archive.pipe(res);
+  for (const info of entries) {
+    archive.file(info.path, { name: info.name });
+  }
+
+  archive.finalize();
+  archive.on('end', () => {
+    console.log(`[Download Success] Batch ZIP ${batchId} delivered. Cleaning up.`);
+    deleteBatch(batchId);
+  });
+});
+
+// Download route — ?keep=1 skips delete (used for iPhone batch thumbnails)
 app.get('/download/:id', (req, res) => {
   const fileId = req.params.id;
+  if (fileId === 'batch') {
+    return res.status(404).send('Use /download/batch/:batchId for ZIP downloads.');
+  }
+
   const info = fileMap.get(fileId);
 
   if (!info) {
@@ -147,19 +312,14 @@ app.get('/download/:id', (req, res) => {
     return res.status(404).send('File physical payload not found.');
   }
 
-  console.log(`[Download] Client is downloading file ${info.name}...`);
+  const keep = req.query.keep === '1';
+  console.log(`[Download] Client is downloading file ${info.name}... (keep=${keep})`);
   res.download(info.path, info.name, (err) => {
     if (err) {
       console.error(`[Download Error] Failed streaming file ${info.name}:`, err);
-    } else {
+    } else if (!keep) {
       console.log(`[Download Success] Completed download of ${info.name}. Deleting from gateway.`);
-      // Delete temporary file to save cloud disk space immediately
-      try {
-        fs.unlinkSync(info.path);
-        fileMap.delete(fileId);
-      } catch (e) {
-        console.error(`[Cleanup Error] Failed removing file payload:`, e);
-      }
+      deleteFileEntry(fileId);
     }
   });
 });
@@ -784,31 +944,53 @@ app.get('/receive', (req, res) => {
       background: #ef4444; margin-right: 8px;
     }
     .status-badge.connected .dot { background: var(--primary); }
-    .preview-wrap {
+    .batch-wrap {
       display: none;
       margin-top: 20px;
       padding: 16px;
       border-radius: 16px;
       background: rgba(22, 27, 34, 0.8);
       border: 1px solid var(--border-color);
+      text-align: left;
     }
-    .preview-wrap.visible { display: block; }
-    .preview-wrap img {
-      max-width: 100%;
-      max-height: 280px;
-      border-radius: 12px;
-      object-fit: contain;
+    .batch-wrap.visible { display: block; }
+    .batch-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: var(--text-main);
+      margin-bottom: 12px;
     }
-    .save-btn {
-      display: inline-block;
-      margin-top: 16px;
-      padding: 12px 24px;
+    .thumb-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-bottom: 16px;
+    }
+    .thumb-grid img {
+      width: 100%;
+      aspect-ratio: 1;
+      object-fit: cover;
+      border-radius: 8px;
+      background: #0d1117;
+    }
+    .download-all-btn {
+      display: block;
+      width: 100%;
+      padding: 14px 20px;
       border-radius: 100px;
       background: linear-gradient(135deg, #38bdf8, #0ea5e9);
       color: #0d1117;
       font-weight: 700;
       text-decoration: none;
-      font-size: 14px;
+      font-size: 15px;
+      text-align: center;
+      box-sizing: border-box;
+    }
+    .zip-hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 10px;
+      line-height: 1.4;
     }
     .instructions {
       text-align: left;
@@ -850,10 +1032,11 @@ app.get('/receive', (req, res) => {
 
       <p class="waiting" id="waitingText">Waiting for photos from Android...</p>
 
-      <div class="preview-wrap" id="previewWrap">
-        <img id="receivedImage" alt="Received photo" />
-        <br />
-        <a class="save-btn" id="saveLink" download="photo.jpg">Save Image</a>
+      <div class="batch-wrap" id="batchWrap">
+        <div class="batch-title" id="batchTitle">Received photos</div>
+        <div class="thumb-grid" id="thumbGrid"></div>
+        <a class="download-all-btn" id="downloadAllBtn" href="#">Download all photos (ZIP)</a>
+        <p class="zip-hint">After download, open the ZIP in Files, then select images and Save to Photos.</p>
       </div>
 
       <div class="toast-error" id="errorToast"></div>
@@ -863,8 +1046,8 @@ app.get('/receive', (req, res) => {
         <ol>
           <li>Leave this Safari tab open (do not switch apps).</li>
           <li>On Android AirReceive, set gateway URL to <code id="originCode"></code></li>
-          <li>Tap <strong>Send to iPhone</strong> and pick photos.</li>
-          <li>When a photo appears, tap <strong>Save Image</strong> or long-press the image → Share → Save to Photos.</li>
+          <li>Tap <strong>Send Photos to iPhone</strong> and select multiple images.</li>
+          <li>Tap <strong>Download all photos (ZIP)</strong>, then extract in the Files app.</li>
         </ol>
       </div>
     </div>
@@ -872,15 +1055,17 @@ app.get('/receive', (req, res) => {
   <script>
     const statusBadge = document.getElementById('statusBadge');
     const statusText = document.getElementById('statusText');
-    const previewWrap = document.getElementById('previewWrap');
-    const receivedImage = document.getElementById('receivedImage');
-    const saveLink = document.getElementById('saveLink');
+    const batchWrap = document.getElementById('batchWrap');
+    const batchTitle = document.getElementById('batchTitle');
+    const thumbGrid = document.getElementById('thumbGrid');
+    const downloadAllBtn = document.getElementById('downloadAllBtn');
     const errorToast = document.getElementById('errorToast');
     const waitingText = document.getElementById('waitingText');
     document.getElementById('originCode').textContent = window.location.origin;
 
     let ws = null;
     let reconnectTimer = null;
+    let currentBatchId = null;
 
     function wsUrl() {
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -917,25 +1102,54 @@ app.get('/receive', (req, res) => {
 
       ws.onerror = () => setConnected(false);
 
+      async function loadBatchThumbnails(files) {
+        thumbGrid.innerHTML = '';
+        for (const file of files) {
+          try {
+            const res = await fetch('/download/' + file.id + '?keep=1');
+            if (!res.ok) continue;
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const img = document.createElement('img');
+            img.src = url;
+            img.alt = file.name || 'Photo';
+            thumbGrid.appendChild(img);
+          } catch (e) {
+            console.warn('Thumbnail failed for', file.id, e);
+          }
+        }
+      }
+
+      async function handleBatch(msg) {
+        waitingText.style.display = 'none';
+        currentBatchId = msg.batchId;
+        const count = msg.count || (msg.files && msg.files.length) || 0;
+        batchTitle.textContent = count + ' photo' + (count === 1 ? '' : 's') + ' ready';
+        downloadAllBtn.href = '/download/batch/' + msg.batchId + '.zip';
+        downloadAllBtn.textContent = 'Download all ' + count + ' photos (ZIP)';
+        batchWrap.classList.add('visible');
+        if (msg.files && msg.files.length) {
+          await loadBatchThumbnails(msg.files);
+        }
+      }
+
       ws.onmessage = async (event) => {
         try {
           const msg = JSON.parse(event.data);
-          if (msg.type !== 'NOTIFY_UPLOAD') return;
-
-          waitingText.style.display = 'none';
-          const res = await fetch('/download/' + msg.id);
-          if (!res.ok) {
-            showError('Download failed. The file may have expired.');
+          if (msg.type === 'NOTIFY_BATCH') {
+            await handleBatch(msg);
             return;
           }
-          const blob = await res.blob();
-          const url = URL.createObjectURL(blob);
-          receivedImage.src = url;
-          saveLink.href = url;
-          saveLink.download = msg.name || 'photo.jpg';
-          previewWrap.classList.add('visible');
+          if (msg.type === 'NOTIFY_UPLOAD') {
+            await handleBatch({
+              type: 'NOTIFY_BATCH',
+              batchId: msg.batchId || msg.id,
+              count: 1,
+              files: [{ id: msg.id, name: msg.name, size: msg.size, mimeType: msg.mimeType }]
+            });
+          }
         } catch (e) {
-          showError('Failed to receive photo: ' + e.message);
+          showError('Failed to receive photos: ' + e.message);
         }
       };
     }

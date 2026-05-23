@@ -49,7 +49,7 @@ data class ServerState(
 
 sealed interface ViewModelEvent {
     object TransferSuccess : ViewModelEvent
-    object SendSuccess : ViewModelEvent
+    data class SendSuccess(val photoCount: Int) : ViewModelEvent
     class Error(val message: String) : ViewModelEvent
 }
 
@@ -126,12 +126,12 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun setCustomUrl(url: String) {
-        val trimmed = url.trim()
+        val trimmed = url.trim().removeSuffix("/")
         val formatted = if (trimmed.isNotEmpty() && !trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
             "https://$trimmed"
         } else {
             trimmed
-        }
+        }.removeSuffix("/")
         val previous = prefs.getString("custom_url", "") ?: ""
         prefs.edit().putString("custom_url", formatted).apply()
         refreshNetworkInfo()
@@ -346,105 +346,108 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         }
         if (uris.isEmpty()) return
 
+        if (uris.size > AirReceiveGatewaySender.MAX_BATCH_FILES) {
+            viewModelScope.launch {
+                _eventFlow.emit(
+                    ViewModelEvent.Error("Maximum ${AirReceiveGatewaySender.MAX_BATCH_FILES} photos per batch.")
+                )
+            }
+            return
+        }
+
         viewModelScope.launch {
             acquireLocks()
             try {
                 val sender = AirReceiveGatewaySender(getApplication(), customUrl)
-
-                for (uri in uris) {
-                    var failed = false
-                    withContext(Dispatchers.IO) {
-                        sender.upload(
-                            uri = uri,
-                            onTransferStarted = { name, size ->
-                                runOnMain {
-                                    _serverState.update {
-                                        it.copy(
-                                            activeTransfer = ActiveTransfer(
-                                                fileName = name,
-                                                progress = 0f,
-                                                bytesRead = 0,
-                                                totalBytes = size,
-                                                status = TransferStatus.IN_PROGRESS
-                                            )
+                withContext(Dispatchers.IO) {
+                    sender.uploadBatch(
+                        uris = uris,
+                        onTransferStarted = { label, size ->
+                            runOnMain {
+                                _serverState.update {
+                                    it.copy(
+                                        activeTransfer = ActiveTransfer(
+                                            fileName = label,
+                                            progress = 0f,
+                                            bytesRead = 0,
+                                            totalBytes = size,
+                                            status = TransferStatus.IN_PROGRESS
                                         )
-                                    }
+                                    )
                                 }
-                            },
-                            onTransferProgress = { read, total ->
-                                val now = SystemClock.elapsedRealtime()
-                                if (read < total && now - lastSendProgressMs < 80) return@upload
-                                lastSendProgressMs = now
-                                runOnMain {
-                                    _serverState.update {
-                                        val current = it.activeTransfer ?: return@update it
-                                        val percentage =
-                                            if (total > 0) read.toFloat() / total.toFloat() else 0f
+                            }
+                        },
+                        onTransferProgress = { read, total ->
+                            val now = SystemClock.elapsedRealtime()
+                            if (read < total && now - lastSendProgressMs < 80) return@uploadBatch
+                            lastSendProgressMs = now
+                            runOnMain {
+                                _serverState.update {
+                                    val current = it.activeTransfer ?: return@update it
+                                    val percentage =
+                                        if (total > 0) read.toFloat() / total.toFloat() else 0f
+                                    it.copy(
+                                        activeTransfer = current.copy(
+                                            progress = percentage,
+                                            bytesRead = read,
+                                            totalBytes = total
+                                        )
+                                    )
+                                }
+                            }
+                        },
+                        onTransferCompleted = { count ->
+                            runOnMain {
+                                _serverState.update {
+                                    val current = it.activeTransfer
+                                    if (current != null) {
                                         it.copy(
                                             activeTransfer = current.copy(
-                                                progress = percentage,
-                                                bytesRead = read,
-                                                totalBytes = total
+                                                progress = 1f,
+                                                status = TransferStatus.COMPLETED
                                             )
                                         )
-                                    }
+                                    } else it
                                 }
-                            },
-                            onTransferCompleted = { name ->
+                            }
+                            viewModelScope.launch {
+                                _eventFlow.emit(ViewModelEvent.SendSuccess(count))
+                                kotlinx.coroutines.delay(2500)
                                 runOnMain {
                                     _serverState.update {
-                                        val current = it.activeTransfer
-                                        if (current != null) {
-                                            it.copy(
-                                                activeTransfer = current.copy(
-                                                    progress = 1f,
-                                                    status = TransferStatus.COMPLETED
-                                                )
-                                            )
+                                        if (it.activeTransfer?.status == TransferStatus.COMPLETED) {
+                                            it.copy(activeTransfer = null)
                                         } else it
-                                    }
-                                }
-                                viewModelScope.launch {
-                                    _eventFlow.emit(ViewModelEvent.SendSuccess)
-                                    kotlinx.coroutines.delay(2500)
-                                    runOnMain {
-                                        _serverState.update {
-                                            if (it.activeTransfer?.fileName == name) {
-                                                it.copy(activeTransfer = null)
-                                            } else it
-                                        }
-                                    }
-                                }
-                            },
-                            onTransferFailed = { error ->
-                                failed = true
-                                runOnMain {
-                                    _serverState.update {
-                                        val current = it.activeTransfer
-                                        if (current != null) {
-                                            it.copy(
-                                                activeTransfer = current.copy(
-                                                    status = TransferStatus.FAILED
-                                                )
-                                            )
-                                        } else it
-                                    }
-                                }
-                                viewModelScope.launch {
-                                    _eventFlow.emit(ViewModelEvent.Error("Send failed: $error"))
-                                    kotlinx.coroutines.delay(4000)
-                                    runOnMain {
-                                        _serverState.update {
-                                            if (it.activeTransfer?.status == TransferStatus.FAILED) {
-                                                it.copy(activeTransfer = null)
-                                            } else it
-                                        }
                                     }
                                 }
                             }
-                        )
-                    }
-                    if (failed) break
+                        },
+                        onTransferFailed = { error ->
+                            runOnMain {
+                                _serverState.update {
+                                    val current = it.activeTransfer
+                                    if (current != null) {
+                                        it.copy(
+                                            activeTransfer = current.copy(
+                                                status = TransferStatus.FAILED
+                                            )
+                                        )
+                                    } else it
+                                }
+                            }
+                            viewModelScope.launch {
+                                _eventFlow.emit(ViewModelEvent.Error("Send failed: $error"))
+                                kotlinx.coroutines.delay(4000)
+                                runOnMain {
+                                    _serverState.update {
+                                        if (it.activeTransfer?.status == TransferStatus.FAILED) {
+                                            it.copy(activeTransfer = null)
+                                        } else it
+                                    }
+                                }
+                            }
+                        }
+                    )
                 }
             } finally {
                 releaseLocks()

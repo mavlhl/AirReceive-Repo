@@ -103,8 +103,10 @@ class MainActivity : ComponentActivity() {
                         is ViewModelEvent.SendSuccess -> {
                             playAirDropChime()
                             triggerSuccessVibration()
+                            val n = event.photoCount
                             showToast(
-                                "Photo sent to iPhone. Save it from Safari on the receive page."
+                                "Sent $n photo${if (n == 1) "" else "s"} to iPhone. " +
+                                    "Tap Download all on the receive page."
                             )
                         }
                         is ViewModelEvent.Error -> {
@@ -235,7 +237,7 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
                     SharePortalPanel(url = serverState.serverUrl)
                 }
 
-                // Send to iPhone via public gateway
+                // Send to iPhone (requires public gateway URL — always show this section)
                 if (serverState.customUrl.isNotEmpty()) {
                     val receiveUrl = remember(serverState.customUrl) {
                         serverState.customUrl.removeSuffix("/") + "/receive"
@@ -244,6 +246,8 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
                         receiveUrl = receiveUrl,
                         onSendPhotos = { viewModel.sendPhotosToGateway(it) }
                     )
+                } else {
+                    SendToIphoneSetupCard()
                 }
 
                 // Active Download Progress Tracker
@@ -730,13 +734,48 @@ fun SharePortalPanel(url: String) {
 }
 
 @Composable
+fun SendToIphoneSetupCard() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.25f))
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text(
+                text = "SEND TO IPHONE",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.2.sp,
+                color = Color(0xFF38BDF8)
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "To send photos to an iPhone, set up the public gateway first:",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "1. Tap the gear icon on the status card above.\n2. Paste your Render URL (e.g. https://airreceive-repo.onrender.com).\n3. Tap the checkmark to save.\n4. The \"Send Photos to iPhone\" button will appear here.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurface,
+                lineHeight = 18.sp
+            )
+        }
+    }
+}
+
+@Composable
 fun SendToIphonePanel(
     receiveUrl: String,
     onSendPhotos: (List<Uri>) -> Unit
 ) {
     val context = LocalContext.current
     val pickImagesLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickMultipleVisualMedia()
+        contract = ActivityResultContracts.PickMultipleVisualMedia(
+            maxItems = com.example.server.AirReceiveGatewaySender.MAX_BATCH_FILES
+        )
     ) { uris ->
         if (uris.isNotEmpty()) {
             onSendPhotos(uris)
@@ -767,7 +806,7 @@ fun SendToIphonePanel(
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "1. On iPhone, open the receive page in Safari and keep it in the foreground.\n2. Tap Send below and choose photos.",
+                text = "1. On iPhone, open the receive page in Safari and keep it in the foreground.\n2. Tap below and select up to 20 photos at once.",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.fillMaxWidth()
@@ -848,7 +887,7 @@ fun SendToIphonePanel(
             ) {
                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Send Photos to iPhone", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Text("Send Photos to iPhone (batch)", fontWeight = FontWeight.Bold, fontSize = 15.sp)
             }
         }
     }
