@@ -8,10 +8,16 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.MultipartBody
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+
+data class GatewayReceiverDevice(
+    val id: String,
+    val displayName: String
+)
 
 class AirReceiveGatewaySender(
     private val context: Context,
@@ -109,8 +115,36 @@ class AirReceiveGatewaySender(
         }
     }
 
+    fun fetchOnlineReceivers(): List<GatewayReceiverDevice> {
+        val url = "${gatewayBaseUrl()}/api/devices?role=receiver"
+        val request = Request.Builder().url(url).get().build()
+        return try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return emptyList()
+                val bodyText = response.body?.string().orEmpty()
+                val json = JSONObject(bodyText)
+                val receivers = json.optJSONArray("receivers") ?: JSONArray()
+                buildList {
+                    for (i in 0 until receivers.length()) {
+                        val item = receivers.getJSONObject(i)
+                        add(
+                            GatewayReceiverDevice(
+                                id = item.getString("id"),
+                                displayName = item.optString("displayName", "Device")
+                            )
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("AirReceiveGatewaySender", "Failed to fetch receivers", e)
+            emptyList()
+        }
+    }
+
     fun uploadBatch(
         uris: List<Uri>,
+        targetDeviceId: String? = null,
         onTransferStarted: (label: String, totalSize: Long) -> Unit,
         onTransferProgress: (bytesRead: Long, totalBytes: Long) -> Unit,
         onTransferCompleted: (photoCount: Int) -> Unit,
@@ -135,6 +169,9 @@ class AirReceiveGatewaySender(
         val progressCounter = longArrayOf(0L)
         val multipart = MultipartBody.Builder().setType(MultipartBody.FORM)
             .addFormDataPart("target", "receiver")
+        if (!targetDeviceId.isNullOrBlank()) {
+            multipart.addFormDataPart("targetDeviceId", targetDeviceId)
+        }
 
         for ((uri, fileName, fileSize) in items) {
             val mimeType = resolver.getType(uri) ?: "image/jpeg"
@@ -172,7 +209,19 @@ class AirReceiveGatewaySender(
             client.newCall(request).execute().use { response ->
                 val bodyText = response.body?.string().orEmpty()
                 if (!response.isSuccessful) {
-                    onTransferFailed("Server error: ${response.code} $bodyText")
+                    val err = try {
+                        JSONObject(bodyText).optString("error")
+                    } catch (_: Exception) {
+                        ""
+                    }
+                    val detail = err.ifEmpty { bodyText }
+                    if (response.code == 404) {
+                        onTransferFailed(
+                            "Receiver is offline. Open ${buildReceivePageUrl()} on the target device, then tap Refresh."
+                        )
+                    } else {
+                        onTransferFailed("Server error: ${response.code} $detail")
+                    }
                     return
                 }
                 val json = try {
@@ -183,11 +232,11 @@ class AirReceiveGatewaySender(
                 }
                 if (json.optBoolean("receiverRelayed", false)) {
                     val count = json.optInt("count", uris.size)
-                    Log.d("AirReceiveGatewaySender", "Batch relayed to iPhone: $count photos")
+                    Log.d("AirReceiveGatewaySender", "Batch relayed to receiver: $count file(s)")
                     onTransferCompleted(count)
                 } else {
                     onTransferFailed(
-                        "No iPhone receive page connected. Open ${buildReceivePageUrl()} in Safari first and keep it in the foreground."
+                        "No receive page connected. Open ${buildReceivePageUrl()} on the target device first."
                     )
                 }
             }

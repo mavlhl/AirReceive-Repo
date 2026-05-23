@@ -17,6 +17,7 @@ import com.example.data.ReceivedPhoto
 import com.example.server.AirReceiveServer
 import com.example.server.AirReceiveGatewayClient
 import com.example.server.AirReceiveGatewaySender
+import com.example.server.GatewayReceiverDevice
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -49,7 +50,9 @@ data class ServerState(
     val networkName: String = "Local Network",
     val activeTransfer: ActiveTransfer? = null,
     val customUrl: String = "",
-    val gatewaySelection: GatewaySelection = GatewaySelection.NONE
+    val gatewaySelection: GatewaySelection = GatewaySelection.NONE,
+    val onlineReceivers: List<GatewayReceiverDevice> = emptyList(),
+    val selectedReceiverId: String? = null
 )
 
 sealed interface ViewModelEvent {
@@ -89,6 +92,10 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
     private var lockRefCount = 0
     private var lastSendProgressMs = 0L
     private val prefs = application.getSharedPreferences("airreceive_prefs", Context.MODE_PRIVATE)
+
+    private fun gatewayDeviceDisplayName(): String =
+        prefs.getString("device_display_name", null)?.trim().orEmpty()
+            .ifEmpty { android.os.Build.MODEL }
 
     /** Compose state must be updated on the main thread. */
     private fun runOnMain(block: () -> Unit) {
@@ -332,6 +339,11 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
                 airReceiveGatewayClient = AirReceiveGatewayClient(
                     context = getApplication(),
                     serverUrl = customUrl,
+                    displayName = gatewayDeviceDisplayName(),
+                    storedDeviceId = prefs.getString("gateway_device_id", null),
+                    onRegistered = { deviceId, _ ->
+                        prefs.edit().putString("gateway_device_id", deviceId).apply()
+                    },
                     onTransferStarted = onStart,
                     onTransferProgress = onProgress,
                     onTransferCompleted = onCompleted,
@@ -366,11 +378,42 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         return AirReceiveGatewaySender(getApplication(), customUrl).buildReceivePageUrl()
     }
 
+    fun refreshReceivers() {
+        val customUrl = _serverState.value.customUrl
+        if (customUrl.isEmpty()) return
+        viewModelScope.launch {
+            val receivers = withContext(Dispatchers.IO) {
+                AirReceiveGatewaySender(getApplication(), customUrl).fetchOnlineReceivers()
+            }
+            _serverState.update { state ->
+                val selected = state.selectedReceiverId
+                val stillValid = selected != null && receivers.any { it.id == selected }
+                state.copy(
+                    onlineReceivers = receivers,
+                    selectedReceiverId = if (stillValid) selected else receivers.singleOrNull()?.id
+                )
+            }
+        }
+    }
+
+    fun selectReceiver(deviceId: String?) {
+        _serverState.update { it.copy(selectedReceiverId = deviceId) }
+    }
+
     fun sendPhotosToGateway(uris: List<Uri>) {
         val customUrl = _serverState.value.customUrl
         if (customUrl.isEmpty()) {
             viewModelScope.launch {
                 _eventFlow.emit(ViewModelEvent.Error("Set a public gateway URL in settings first."))
+            }
+            return
+        }
+        val targetDeviceId = _serverState.value.selectedReceiverId
+        if (targetDeviceId.isNullOrEmpty()) {
+            viewModelScope.launch {
+                _eventFlow.emit(
+                    ViewModelEvent.Error("Select a receiver device first. Open /receive on the target PC or phone, then tap Refresh.")
+                )
             }
             return
         }
@@ -392,6 +435,7 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
                 withContext(Dispatchers.IO) {
                     sender.uploadBatch(
                         uris = uris,
+                        targetDeviceId = targetDeviceId,
                         onTransferStarted = { label, size ->
                             runOnMain {
                                 _serverState.update {

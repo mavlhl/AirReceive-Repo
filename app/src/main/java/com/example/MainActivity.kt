@@ -59,6 +59,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import coil.compose.AsyncImage
 import com.example.data.ReceivedPhoto
+import com.example.server.GatewayReceiverDevice
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.*
 import com.example.util.GallerySaver
@@ -246,8 +247,15 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
                     val receiveUrl = remember(serverState.customUrl) {
                         serverState.customUrl.removeSuffix("/") + "/receive"
                     }
+                    LaunchedEffect(serverState.customUrl) {
+                        viewModel.refreshReceivers()
+                    }
                     SendToIphonePanel(
                         receiveUrl = receiveUrl,
+                        onlineReceivers = serverState.onlineReceivers,
+                        selectedReceiverId = serverState.selectedReceiverId,
+                        onSelectReceiver = { viewModel.selectReceiver(it) },
+                        onRefreshReceivers = { viewModel.refreshReceivers() },
                         onSendPhotos = { viewModel.sendPhotosToGateway(it) }
                     )
                 } else {
@@ -858,10 +866,15 @@ fun SendToIphoneSetupCard() {
 @Composable
 fun SendToIphonePanel(
     receiveUrl: String,
+    onlineReceivers: List<GatewayReceiverDevice>,
+    selectedReceiverId: String?,
+    onSelectReceiver: (String?) -> Unit,
+    onRefreshReceivers: () -> Unit,
     onSendPhotos: (List<Uri>) -> Unit
 ) {
     val context = LocalContext.current
     val maxBatch = com.example.server.AirReceiveGatewaySender.MAX_BATCH_FILES
+    val canSend = selectedReceiverId != null
     val pickFilesLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
@@ -892,7 +905,7 @@ fun SendToIphonePanel(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "SEND PHOTOS (GATEWAY)",
+                text = "SEND TO DEVICE (GATEWAY)",
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.2.sp,
@@ -901,12 +914,48 @@ fun SendToIphonePanel(
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "1. On iPhone or PC, open the receive page below and keep it in the foreground.\n2. Select up to 20 photos or image files from your device.",
+                text = "1. On the target PC or phone, open the receive page and keep it in the foreground.\n2. Pick the device below, then send up to 20 photos or files.",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.fillMaxWidth()
             )
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "Send to",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurface
+                )
+                TextButton(onClick = onRefreshReceivers) {
+                    Text("Refresh", fontSize = 12.sp, color = Color(0xFF38BDF8))
+                }
+            }
+
+            if (onlineReceivers.isEmpty()) {
+                Text(
+                    text = "No receivers online. Open /receive on the target device, then tap Refresh.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.fillMaxWidth()
+                )
+            } else {
+                onlineReceivers.forEach { device ->
+                    GatewayOptionRow(
+                        label = device.displayName,
+                        subtitle = "Online — tap to select",
+                        selected = device.id == selectedReceiverId,
+                        onClick = { onSelectReceiver(device.id) }
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(12.dp))
 
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -967,13 +1016,16 @@ fun SendToIphonePanel(
 
             Button(
                 onClick = { pickFilesLauncher.launch(arrayOf("image/*")) },
+                enabled = canSend,
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("btn_send_to_iphone"),
                 shape = CircleShape,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = Color(0xFF38BDF8),
-                    contentColor = Color(0xFF0D1117)
+                    contentColor = Color(0xFF0D1117),
+                    disabledContainerColor = Color(0xFF38BDF8).copy(alpha = 0.35f),
+                    disabledContentColor = Color(0xFF0D1117).copy(alpha = 0.5f)
                 )
             ) {
                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -989,6 +1041,7 @@ fun SendToIphonePanel(
                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                     )
                 },
+                enabled = canSend,
                 modifier = Modifier.fillMaxWidth(),
                 shape = CircleShape,
                 border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f))

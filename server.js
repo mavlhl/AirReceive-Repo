@@ -26,9 +26,26 @@ const fileMap = new Map();
 // batchId -> { fileIds: string[], createdAt: number }
 const batchMap = new Map();
 
-// Track connected AirReceive phones and Safari receiver tabs
-const activePhones = new Set();
-const activeReceivers = new Set();
+// deviceId -> { ws, role: 'phone'|'receiver', displayName, connectedAt }
+const deviceRegistry = new Map();
+
+function getSocketsByRole(role) {
+  const sockets = [];
+  for (const entry of deviceRegistry.values()) {
+    if (entry.role === role && entry.ws.readyState === WebSocket.OPEN) {
+      sockets.push(entry.ws);
+    }
+  }
+  return sockets;
+}
+
+function countByRole(role) {
+  let n = 0;
+  for (const entry of deviceRegistry.values()) {
+    if (entry.role === role && entry.ws.readyState === WebSocket.OPEN) n++;
+  }
+  return n;
+}
 
 function broadcastToSockets(sockets, notification) {
   for (const socket of sockets) {
@@ -36,6 +53,120 @@ function broadcastToSockets(sockets, notification) {
       socket.send(notification);
     }
   }
+}
+
+function notifyDevice(deviceId, notification) {
+  const entry = deviceRegistry.get(deviceId);
+  if (!entry || entry.ws.readyState !== WebSocket.OPEN) {
+    return false;
+  }
+  entry.ws.send(notification);
+  return true;
+}
+
+function relayToTargets(target, targetDeviceId, notification) {
+  const role = target === 'receiver' ? 'receiver' : 'phone';
+  if (targetDeviceId) {
+    const entry = deviceRegistry.get(targetDeviceId);
+    if (!entry || entry.role !== role) {
+      return false;
+    }
+    return notifyDevice(targetDeviceId, notification);
+  }
+  const sockets = getSocketsByRole(role);
+  if (sockets.length === 0) {
+    return false;
+  }
+  broadcastToSockets(sockets, notification);
+  return true;
+}
+
+function listDevices(roleFilter) {
+  const receivers = [];
+  const phones = [];
+  for (const [id, entry] of deviceRegistry.entries()) {
+    if (entry.ws.readyState !== WebSocket.OPEN) continue;
+    const item = {
+      id,
+      displayName: entry.displayName,
+      connectedAt: entry.connectedAt
+    };
+    if (entry.role === 'receiver') receivers.push(item);
+    else if (entry.role === 'phone') phones.push(item);
+  }
+  if (roleFilter === 'receiver') return { receivers, phones: [] };
+  if (roleFilter === 'phone') return { receivers: [], phones };
+  return { receivers, phones };
+}
+
+function completeRegistration(ws, role, displayName, reconnectDeviceId) {
+  if (ws.deviceId) {
+    deviceRegistry.delete(ws.deviceId);
+  }
+  const deviceId = reconnectDeviceId || uuidv4();
+  const name = (displayName || '').trim() || (role === 'phone' ? 'Android Phone' : 'Browser');
+  ws.deviceId = deviceId;
+  ws.deviceRole = role;
+  ws.isRegistered = true;
+  deviceRegistry.set(deviceId, {
+    ws,
+    role,
+    displayName: name,
+    connectedAt: Date.now()
+  });
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'REGISTERED', deviceId, displayName: name }));
+  }
+  console.log(`[WebSocket] Registered ${role} "${name}" (${deviceId})`);
+  return deviceId;
+}
+
+function unregisterSocket(ws) {
+  if (ws.deviceId) {
+    deviceRegistry.delete(ws.deviceId);
+    console.log(`[WebSocket] Unregistered ${ws.deviceId}`);
+  }
+}
+
+function setupDeviceSocket(ws, role, label) {
+  ws.deviceRole = role;
+  ws.isRegistered = false;
+  let registerTimeout = setTimeout(() => {
+    if (!ws.isRegistered) {
+      completeRegistration(ws, role, role === 'phone' ? 'Android Phone' : 'Browser');
+    }
+  }, 5000);
+
+  ws.on('message', (raw) => {
+    try {
+      const msg = JSON.parse(raw.toString());
+      if (msg.type === 'REGISTER') {
+        clearTimeout(registerTimeout);
+        completeRegistration(
+          ws,
+          role,
+          msg.displayName,
+          msg.deviceId || null
+        );
+      }
+    } catch (e) {
+      console.warn(`[WebSocket] Invalid message from ${label}:`, e.message);
+    }
+  });
+
+  ws.on('close', () => {
+    clearTimeout(registerTimeout);
+    unregisterSocket(ws);
+    console.log(`[WebSocket] ${label} disconnected (${countByRole(role)} ${role} remaining).`);
+  });
+
+  ws.on('error', (err) => {
+    clearTimeout(registerTimeout);
+    console.error(`[WebSocket] ${label} error:`, err);
+    unregisterSocket(ws);
+  });
+
+  console.log(`[WebSocket] ${label} connected (awaiting REGISTER).`);
 }
 
 function deleteFileEntry(fileId) {
@@ -104,13 +235,23 @@ setInterval(() => {
   }
 }, 60 * 1000);
 
+// List online registered devices
+app.get('/api/devices', (req, res) => {
+  const role = req.query.role;
+  const lists = listDevices(role);
+  res.json(lists);
+});
+
 // Status route for webpages to see connected clients
 app.get('/api/status', (req, res) => {
+  const phoneCount = countByRole('phone');
+  const receiverCount = countByRole('receiver');
   res.json({
-    phoneConnected: activePhones.size > 0,
-    receiverConnected: activeReceivers.size > 0,
-    connectionsCount: activePhones.size,
-    receiverCount: activeReceivers.size
+    phoneConnected: phoneCount > 0,
+    receiverConnected: receiverCount > 0,
+    connectionsCount: phoneCount,
+    receiverCount: receiverCount,
+    devices: { receivers: receiverCount, phones: phoneCount }
   });
 });
 
@@ -123,7 +264,8 @@ app.post('/upload', upload.single('file'), (req, res) => {
   const fileInfo = registerUploadedFile(req.file);
   const fileId = fileInfo.id;
   const target = (req.body.target === 'receiver') ? 'receiver' : 'phone';
-  console.log(`[Upload] File received: ${fileInfo.name} (${fileInfo.size} bytes). ID: ${fileId}, target: ${target}`);
+  const targetDeviceId = (req.body.targetDeviceId || '').trim() || null;
+  console.log(`[Upload] File received: ${fileInfo.name} (${fileInfo.size} bytes). ID: ${fileId}, target: ${target}, targetDeviceId: ${targetDeviceId || 'broadcast'}`);
 
   const notification = JSON.stringify({
     type: 'NOTIFY_UPLOAD',
@@ -133,25 +275,27 @@ app.post('/upload', upload.single('file'), (req, res) => {
     mimeType: fileInfo.mimeType
   });
 
-  let phoneRelayed = false;
-  let receiverRelayed = false;
+  const relayed = relayToTargets(target, targetDeviceId, notification);
+  const phoneRelayed = target === 'phone' && relayed;
+  const receiverRelayed = target === 'receiver' && relayed;
 
-  if (target === 'receiver') {
-    if (activeReceivers.size === 0) {
-      console.warn(`[Broadcast] No receiver browsers connected to relay the file.`);
-    } else {
-      broadcastToSockets(activeReceivers, notification);
-      receiverRelayed = true;
-      console.log(`[Broadcast] Notified ${activeReceivers.size} receiver socket(s).`);
+  if (!relayed) {
+    const msg = targetDeviceId
+      ? 'Target device is offline or not found.'
+      : (target === 'receiver' ? 'No receiver browsers connected.' : 'No phones connected.');
+    console.warn(`[Broadcast] ${msg}`);
+    if (targetDeviceId) {
+      return res.status(404).json({
+        success: false,
+        error: msg,
+        target,
+        targetDeviceId,
+        phoneRelayed: false,
+        receiverRelayed: false
+      });
     }
   } else {
-    if (activePhones.size === 0) {
-      console.warn(`[Broadcast] No phones connected to relay the file.`);
-    } else {
-      broadcastToSockets(activePhones, notification);
-      phoneRelayed = true;
-      console.log(`[Broadcast] Notified ${activePhones.size} phone socket(s).`);
-    }
+    console.log(`[Broadcast] Notified ${target}${targetDeviceId ? ' device ' + targetDeviceId : ' (all)'}.`);
   }
 
   res.json({
@@ -159,6 +303,7 @@ app.post('/upload', upload.single('file'), (req, res) => {
     fileId: fileId,
     name: fileInfo.name,
     target: target,
+    targetDeviceId: targetDeviceId,
     phoneRelayed: phoneRelayed,
     receiverRelayed: receiverRelayed
   });
@@ -184,6 +329,7 @@ app.post('/upload/batch', upload.array('files', MAX_BATCH_FILES), (req, res) => 
   }
 
   const target = (req.body.target === 'receiver') ? 'receiver' : 'phone';
+  const targetDeviceId = (req.body.targetDeviceId || '').trim() || null;
   const batchId = uuidv4();
   const fileIds = [];
   const fileMeta = [];
@@ -200,41 +346,72 @@ app.post('/upload/batch', upload.array('files', MAX_BATCH_FILES), (req, res) => 
   }
 
   batchMap.set(batchId, { fileIds, createdAt: Date.now() });
-  console.log(`[Batch] ${files.length} file(s), ${totalBytes} bytes, batchId=${batchId}, target=${target}`);
+  console.log(`[Batch] ${files.length} file(s), ${totalBytes} bytes, batchId=${batchId}, target=${target}, targetDeviceId=${targetDeviceId || 'broadcast'}`);
 
   let phoneRelayed = false;
   let receiverRelayed = false;
 
   if (target === 'receiver') {
-    if (activeReceivers.size === 0) {
-      console.warn(`[Broadcast] No receiver browsers connected for batch.`);
+    const notification = JSON.stringify({
+      type: 'NOTIFY_BATCH',
+      batchId,
+      files: fileMeta,
+      count: fileMeta.length
+    });
+    receiverRelayed = relayToTargets('receiver', targetDeviceId, notification);
+    if (!receiverRelayed) {
+      const msg = targetDeviceId
+        ? 'Target device is offline or not found.'
+        : 'No receiver browsers connected for batch.';
+      console.warn(`[Broadcast] ${msg}`);
+      if (targetDeviceId) {
+        deleteBatch(batchId);
+        return res.status(404).json({
+          success: false,
+          error: msg,
+          batchId,
+          target,
+          targetDeviceId,
+          phoneRelayed: false,
+          receiverRelayed: false
+        });
+      }
     } else {
-      const notification = JSON.stringify({
-        type: 'NOTIFY_BATCH',
-        batchId,
-        files: fileMeta,
-        count: fileMeta.length
-      });
-      broadcastToSockets(activeReceivers, notification);
-      receiverRelayed = true;
-      console.log(`[Broadcast] NOTIFY_BATCH sent to ${activeReceivers.size} receiver(s).`);
+      console.log(`[Broadcast] NOTIFY_BATCH sent to receiver${targetDeviceId ? ' ' + targetDeviceId : '(s)'}.`);
     }
   } else {
-    if (activePhones.size === 0) {
-      console.warn(`[Broadcast] No phones connected for batch.`);
-    } else {
-      for (const meta of fileMeta) {
-        const notification = JSON.stringify({
-          type: 'NOTIFY_UPLOAD',
-          id: meta.id,
-          name: meta.name,
-          size: meta.size,
-          mimeType: meta.mimeType,
-          batchId
-        });
-        broadcastToSockets(activePhones, notification);
+    let anyRelayed = false;
+    for (const meta of fileMeta) {
+      const notification = JSON.stringify({
+        type: 'NOTIFY_UPLOAD',
+        id: meta.id,
+        name: meta.name,
+        size: meta.size,
+        mimeType: meta.mimeType,
+        batchId
+      });
+      if (relayToTargets('phone', targetDeviceId, notification)) {
+        anyRelayed = true;
       }
-      phoneRelayed = true;
+    }
+    phoneRelayed = anyRelayed;
+    if (!phoneRelayed) {
+      const msg = targetDeviceId
+        ? 'Target device is offline or not found.'
+        : 'No phones connected for batch.';
+      console.warn(`[Broadcast] ${msg}`);
+      if (targetDeviceId) {
+        deleteBatch(batchId);
+        return res.status(404).json({
+          success: false,
+          error: msg,
+          batchId,
+          target,
+          targetDeviceId,
+          phoneRelayed: false,
+          receiverRelayed: false
+        });
+      }
     }
   }
 
@@ -243,6 +420,7 @@ app.post('/upload/batch', upload.array('files', MAX_BATCH_FILES), (req, res) => 
     batchId,
     count: fileMeta.length,
     target,
+    targetDeviceId,
     phoneRelayed,
     receiverRelayed
   });
@@ -600,7 +778,8 @@ app.get('/', (req, res) => {
       <h1>AirReceive Gateway</h1>
       <p class="tagline">Send photos to your Android device from any browser</p>
 
-      <a class="nav-link" href="/receive">Receive on iPhone / PC &rarr;</a>
+      <a class="nav-link" href="/send">Send to PC / phone &rarr;</a>
+      <a class="nav-link" href="/receive">Receive files &rarr;</a>
 
       <div class="status-badge" id="statusBadge">
         <span class="dot"></span>
@@ -818,20 +997,299 @@ app.get('/', (req, res) => {
 const wssPhone = new WebSocket.Server({ noServer: true });
 const wssReceiver = new WebSocket.Server({ noServer: true });
 
-function trackSocket(ws, set, label) {
-  set.add(ws);
-  console.log(`[WebSocket] ${label} connected (${set.size} total).`);
 
-  ws.on('close', () => {
-    set.delete(ws);
-    console.log(`[WebSocket] ${label} disconnected (${set.size} remaining).`);
-  });
+// PC / browser send page (pick target device, then upload batch)
+app.get('/send', (req, res) => {
+  res.send(`
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AirReceive — Send files</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-color: #0d1117;
+      --card-bg: #161b22;
+      --border-color: #30363d;
+      --primary: #38bdf8;
+      --text-main: #f0f6fc;
+      --text-muted: #8b949e;
+    }
+    body {
+      margin: 0;
+      background: var(--bg-color);
+      color: var(--text-main);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container { width: 90%; max-width: 560px; margin: 24px auto; }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 20px;
+      padding: 32px;
+    }
+    h1 { font-size: 24px; margin: 0 0 8px; text-align: center; }
+    .tagline { color: var(--text-muted); font-size: 14px; margin-bottom: 20px; text-align: center; }
+    .nav-row { text-align: center; margin-bottom: 20px; }
+    .nav-link {
+      display: inline-block;
+      margin: 4px;
+      padding: 8px 14px;
+      border-radius: 100px;
+      border: 1px solid var(--border-color);
+      color: var(--primary);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    label { font-size: 12px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 6px; }
+    input[type="text"] {
+      width: 100%;
+      box-sizing: border-box;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border-color);
+      background: #0d1117;
+      color: var(--text-main);
+      font-size: 14px;
+      margin-bottom: 16px;
+    }
+    .device-list {
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 8px;
+      margin-bottom: 16px;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+    .device-option {
+      display: flex;
+      align-items: center;
+      padding: 10px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    .device-option:hover { background: rgba(56, 189, 248, 0.08); }
+    .device-option input { margin-right: 10px; }
+    .device-empty { color: var(--text-muted); font-size: 13px; padding: 12px; text-align: center; }
+    .drop-zone {
+      border: 2px dashed var(--border-color);
+      border-radius: 16px;
+      padding: 28px;
+      text-align: center;
+      cursor: pointer;
+      margin-bottom: 16px;
+    }
+    .drop-zone.disabled { opacity: 0.45; pointer-events: none; }
+    .drop-zone strong { display: block; margin-bottom: 6px; }
+    .drop-zone span { font-size: 12px; color: var(--text-muted); }
+    .file-input { display: none; }
+    .send-btn {
+      width: 100%;
+      padding: 14px;
+      border: none;
+      border-radius: 100px;
+      background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+      color: #0d1117;
+      font-weight: 700;
+      font-size: 15px;
+      cursor: pointer;
+    }
+    .send-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .progress { display: none; margin-top: 12px; font-size: 13px; color: var(--text-muted); }
+    .toast-error {
+      display: none;
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 12px;
+      background: rgba(239, 68, 68, 0.12);
+      color: #fecaca;
+      font-size: 13px;
+    }
+    .toast-success {
+      display: none;
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 12px;
+      background: rgba(16, 185, 129, 0.12);
+      color: #a7f3d0;
+      font-size: 13px;
+    }
+    .refresh-btn {
+      background: transparent;
+      border: 1px solid var(--border-color);
+      color: var(--primary);
+      padding: 6px 12px;
+      border-radius: 100px;
+      font-size: 12px;
+      cursor: pointer;
+      margin-bottom: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <div class="nav-row">
+        <a class="nav-link" href="/receive">Receive</a>
+        <a class="nav-link" href="/">Send to Android</a>
+      </div>
+      <h1>Send files</h1>
+      <p class="tagline">Send images and files to another PC or phone on this gateway</p>
 
-  ws.on('error', (err) => {
-    console.error(`[WebSocket] ${label} error:`, err);
-    set.delete(ws);
-  });
-}
+      <label for="senderName">Your name (optional)</label>
+      <input type="text" id="senderName" placeholder="e.g. Office Laptop" maxlength="64" />
+
+      <label>Send to device</label>
+      <button type="button" class="refresh-btn" id="refreshBtn">Refresh list</button>
+      <div class="device-list" id="deviceList">
+        <div class="device-empty">Looking for online receivers...</div>
+      </div>
+
+      <div class="drop-zone disabled" id="dropZone">
+        <strong>Select files to send</strong>
+        <span>Up to ${MAX_BATCH_FILES} files, 100 MB total — images, PDF, ZIP, etc.</span>
+        <input type="file" id="fileInput" class="file-input" multiple />
+      </div>
+
+      <button type="button" class="send-btn" id="sendBtn" disabled>Send to selected device</button>
+      <p class="progress" id="progressText"></p>
+      <div class="toast-success" id="successToast"></div>
+      <div class="toast-error" id="errorToast"></div>
+    </div>
+  </div>
+  <script>
+    const MAX_BATCH_FILES = ${MAX_BATCH_FILES};
+    const SENDER_NAME_KEY = 'airreceive_sender_name';
+    const deviceListEl = document.getElementById('deviceList');
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const sendBtn = document.getElementById('sendBtn');
+    const progressText = document.getElementById('progressText');
+    const successToast = document.getElementById('successToast');
+    const errorToast = document.getElementById('errorToast');
+    const senderNameInput = document.getElementById('senderName');
+    const refreshBtn = document.getElementById('refreshBtn');
+
+    let selectedDeviceId = null;
+    let pendingFiles = [];
+
+    senderNameInput.value = localStorage.getItem(SENDER_NAME_KEY) || '';
+    senderNameInput.addEventListener('change', () => {
+      localStorage.setItem(SENDER_NAME_KEY, senderNameInput.value.trim());
+    });
+
+    function showError(msg) {
+      successToast.style.display = 'none';
+      errorToast.textContent = msg;
+      errorToast.style.display = 'block';
+    }
+    function showSuccess(msg) {
+      errorToast.style.display = 'none';
+      successToast.textContent = msg;
+      successToast.style.display = 'block';
+    }
+
+    function updateSendEnabled() {
+      const ok = selectedDeviceId && pendingFiles.length > 0;
+      sendBtn.disabled = !ok;
+      dropZone.classList.toggle('disabled', !selectedDeviceId);
+    }
+
+    async function refreshDevices() {
+      try {
+        const res = await fetch('/api/devices?role=receiver');
+        const data = await res.json();
+        const receivers = data.receivers || [];
+        if (receivers.length === 0) {
+          deviceListEl.innerHTML = '<div class="device-empty">No receivers online. Open <strong>/receive</strong> on the target laptop or phone first.</div>';
+          selectedDeviceId = null;
+          updateSendEnabled();
+          return;
+        }
+        deviceListEl.innerHTML = '';
+        receivers.forEach((dev) => {
+          const row = document.createElement('label');
+          row.className = 'device-option';
+          const radio = document.createElement('input');
+          radio.type = 'radio';
+          radio.name = 'targetDevice';
+          radio.value = dev.id;
+          if (dev.id === selectedDeviceId) radio.checked = true;
+          radio.addEventListener('change', () => {
+            selectedDeviceId = dev.id;
+            updateSendEnabled();
+          });
+          const text = document.createElement('span');
+          text.textContent = dev.displayName + ' — online';
+          row.appendChild(radio);
+          row.appendChild(text);
+          deviceListEl.appendChild(row);
+        });
+        if (!selectedDeviceId && receivers.length === 1) {
+          selectedDeviceId = receivers[0].id;
+          deviceListEl.querySelector('input').checked = true;
+          updateSendEnabled();
+        }
+      } catch (e) {
+        deviceListEl.innerHTML = '<div class="device-empty">Could not load devices.</div>';
+      }
+    }
+
+    dropZone.addEventListener('click', () => {
+      if (selectedDeviceId) fileInput.click();
+    });
+    fileInput.addEventListener('change', () => {
+      if (fileInput.files.length) {
+        pendingFiles = Array.from(fileInput.files).slice(0, MAX_BATCH_FILES);
+        dropZone.querySelector('strong').textContent = pendingFiles.length + ' file(s) selected';
+        updateSendEnabled();
+      }
+    });
+
+    sendBtn.addEventListener('click', async () => {
+      if (!selectedDeviceId || pendingFiles.length === 0) return;
+      sendBtn.disabled = true;
+      progressText.style.display = 'block';
+      progressText.textContent = 'Uploading...';
+      const formData = new FormData();
+      formData.append('target', 'receiver');
+      formData.append('targetDeviceId', selectedDeviceId);
+      pendingFiles.forEach((f) => formData.append('files', f));
+      try {
+        const res = await fetch('/upload/batch', { method: 'POST', body: formData });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showError(data.error || 'Upload failed. Is the receiver still online?');
+          sendBtn.disabled = false;
+          return;
+        }
+        showSuccess('Sent ' + (data.count || pendingFiles.length) + ' file(s) successfully.');
+        pendingFiles = [];
+        fileInput.value = '';
+        dropZone.querySelector('strong').textContent = 'Select files to send';
+        updateSendEnabled();
+      } catch (e) {
+        showError('Network error: ' + (e.message || 'Upload failed'));
+        sendBtn.disabled = false;
+      }
+      progressText.style.display = 'none';
+    });
+
+    refreshBtn.addEventListener('click', refreshDevices);
+    setInterval(refreshDevices, 3000);
+    refreshDevices();
+  </script>
+</body>
+</html>
+  `);
+});
 
 // iPhone / Safari receive page
 app.get('/receive', (req, res) => {
@@ -1028,21 +1486,50 @@ app.get('/receive', (req, res) => {
       font-size: 14px;
       margin-top: 12px;
     }
+    .nav-row { margin-bottom: 16px; }
+    .device-identity {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin: 0 0 12px;
+    }
+    .file-row {
+      grid-column: 1 / -1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border-color);
+      background: rgba(13, 17, 23, 0.6);
+      margin-bottom: 8px;
+    }
+    .file-row-name {
+      font-size: 13px;
+      font-weight: 600;
+      word-break: break-all;
+      text-align: left;
+    }
+    .file-row-meta { font-size: 11px; color: var(--text-muted); }
   </style>
 </head>
 <body>
   <div class="container">
     <div class="card">
-      <a class="nav-link" href="/">&larr; Send to Android</a>
+      <div class="nav-row">
+        <a class="nav-link" href="/send">Send files &rarr;</a>
+        <a class="nav-link" href="/">Send to Android</a>
+      </div>
       <h1>Receive photos</h1>
-      <p class="tagline">Receive on iPhone, PC, or any browser — keep this tab open while sending from Android</p>
+      <p class="tagline">Receive on iPhone, PC, or any browser — keep this tab open while sending</p>
 
       <div class="status-badge" id="statusBadge">
         <span class="dot"></span>
         <span id="statusText">Connecting...</span>
       </div>
+      <p class="device-identity" id="deviceIdentity" style="display:none;">You are: <strong id="myDeviceName"></strong></p>
 
-      <p class="waiting" id="waitingText">Waiting for photos from Android...</p>
+      <p class="waiting" id="waitingText">Waiting for files...</p>
 
       <div class="batch-wrap" id="batchWrap">
         <div class="batch-title" id="batchTitle">Received photos</div>
@@ -1050,9 +1537,10 @@ app.get('/receive', (req, res) => {
         <div class="action-buttons">
           <button type="button" class="save-all-btn" id="saveAllBtn" disabled>Save all to Photos</button>
           <p class="btn-subtitle">iPhone / iPad — opens Share sheet; choose <strong>Save Images</strong> or <strong>Add to Photos</strong> (Safari recommended)</p>
-          <button type="button" class="download-all-btn" id="downloadAllBtn" disabled>Download all images</button>
+          <button type="button" class="download-all-btn" id="downloadAllBtn" disabled>Download all files</button>
           <p class="btn-subtitle">PC / Mac — saves each file to your Downloads folder (browser may ask once per file)</p>
         </div>
+        <p class="save-hint" id="nonImageHint" style="display:none;">This batch includes non-image files — use Download all (Save to Photos is for images only).</p>
         <p class="save-hint" id="fallbackHint" style="display:none;">On iPhone, tap a thumbnail to save one photo at a time via Share.</p>
       </div>
 
@@ -1064,7 +1552,7 @@ app.get('/receive', (req, res) => {
         <ol>
           <li>Keep this tab open (Safari on iPhone, or Chrome / Edge / Firefox on PC).</li>
           <li>On Android AirReceive, enable the gateway (free hosted or your URL): <code id="originCode"></code></li>
-          <li>On Android, tap <strong>Select photos or files</strong> and send up to 20 images.</li>
+          <li>Sender opens <strong>/send</strong> (PC) or Android app, picks your device name, then sends files.</li>
           <li><strong>iPhone:</strong> tap <strong>Save all to Photos</strong> and confirm on the Share sheet.</li>
           <li><strong>PC:</strong> tap <strong>Download all images</strong> and check your Downloads folder.</li>
         </ol>
@@ -1083,7 +1571,22 @@ app.get('/receive', (req, res) => {
     const errorToast = document.getElementById('errorToast');
     const waitingText = document.getElementById('waitingText');
     const fallbackHint = document.getElementById('fallbackHint');
+    const nonImageHint = document.getElementById('nonImageHint');
+    const deviceIdentity = document.getElementById('deviceIdentity');
+    const myDeviceNameEl = document.getElementById('myDeviceName');
     document.getElementById('originCode').textContent = window.location.origin;
+
+    const DEVICE_NAME_KEY = 'airreceive_device_name';
+    const DEVICE_ID_KEY = 'airreceive_device_id';
+
+    function getDeviceName() {
+      let name = localStorage.getItem(DEVICE_NAME_KEY);
+      if (!name) {
+        name = prompt('Enter a name for this device (shown to senders):', 'My Laptop') || 'My Laptop';
+        localStorage.setItem(DEVICE_NAME_KEY, name.trim());
+      }
+      return name.trim();
+    }
 
     let ws = null;
     let reconnectTimer = null;
@@ -1126,6 +1629,26 @@ app.get('/receive', (req, res) => {
       return !isIOS();
     }
 
+    function isImageMime(type, name) {
+      if (type && type.startsWith('image/')) return true;
+      const lower = (name || '').toLowerCase();
+      return /\\.(jpe?g|png|gif|webp|heic|heif|bmp|svg)$/.test(lower);
+    }
+
+    function formatBytes(n) {
+      if (n < 1024) return n + ' B';
+      if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+      return (n / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+
+    function updateBatchActions() {
+      const ready = cachedBatchFiles.length > 0;
+      const allImages = ready && cachedBatchFiles.every((e) => isImageMime(e.type, e.name));
+      saveAllBtn.disabled = !ready || !allImages;
+      downloadAllBtn.disabled = !ready;
+      nonImageHint.style.display = ready && !allImages ? 'block' : 'none';
+    }
+
     function mimeFromName(name) {
       const lower = (name || '').toLowerCase();
       if (lower.endsWith('.png')) return 'image/png';
@@ -1158,6 +1681,10 @@ app.get('/receive', (req, res) => {
     async function saveAllToPhotos() {
       if (cachedBatchFiles.length === 0) {
         showError('No photos loaded yet.');
+        return;
+      }
+      if (!cachedBatchFiles.every((e) => isImageMime(e.type, e.name))) {
+        showError('This batch contains non-image files. Use Download all instead.');
         return;
       }
       saveAllBtn.disabled = true;
@@ -1236,7 +1763,15 @@ app.get('/receive', (req, res) => {
 
       ws = new WebSocket(wsUrl());
 
-      ws.onopen = () => setConnected(true);
+      ws.onopen = () => {
+        setConnected(true);
+        const reg = {
+          type: 'REGISTER',
+          displayName: getDeviceName(),
+          deviceId: localStorage.getItem(DEVICE_ID_KEY) || undefined
+        };
+        ws.send(JSON.stringify(reg));
+      };
 
       ws.onclose = () => {
         setConnected(false);
@@ -1255,8 +1790,31 @@ app.get('/receive', (req, res) => {
             const blob = await res.blob();
             const name = file.name || 'photo.jpg';
             const type = file.mimeType || blob.type || mimeFromName(name);
-            const entry = { name, blob, type };
+            const entry = { name, blob, type, size: file.size || blob.size };
             cachedBatchFiles.push(entry);
+
+            if (!isImageMime(type, name)) {
+              const row = document.createElement('div');
+              row.className = 'file-row';
+              const info = document.createElement('div');
+              const nameEl = document.createElement('div');
+              nameEl.className = 'file-row-name';
+              nameEl.textContent = name;
+              const meta = document.createElement('div');
+              meta.className = 'file-row-meta';
+              meta.textContent = formatBytes(entry.size);
+              info.appendChild(nameEl);
+              info.appendChild(meta);
+              const dl = document.createElement('a');
+              dl.className = 'thumb-dl';
+              dl.textContent = 'Download';
+              dl.href = URL.createObjectURL(blob);
+              dl.download = name;
+              row.appendChild(info);
+              row.appendChild(dl);
+              thumbGrid.appendChild(row);
+              continue;
+            }
 
             const wrap = document.createElement('div');
             wrap.className = 'thumb-item';
@@ -1291,9 +1849,7 @@ app.get('/receive', (req, res) => {
             console.warn('Thumbnail failed for', file.id, e);
           }
         }
-        const ready = cachedBatchFiles.length > 0;
-        saveAllBtn.disabled = !ready;
-        downloadAllBtn.disabled = !ready;
+        updateBatchActions();
       }
 
       async function handleBatch(msg) {
@@ -1301,9 +1857,9 @@ app.get('/receive', (req, res) => {
         successToast.style.display = 'none';
         currentBatchId = msg.batchId;
         const count = msg.count || (msg.files && msg.files.length) || 0;
-        batchTitle.textContent = count + ' photo' + (count === 1 ? '' : 's') + ' ready';
+        batchTitle.textContent = count + ' file' + (count === 1 ? '' : 's') + ' ready';
         saveAllBtn.textContent = 'Save all ' + count + ' photos to Photos';
-        downloadAllBtn.textContent = 'Download all ' + count + ' images';
+        downloadAllBtn.textContent = 'Download all ' + count + ' files';
         saveAllBtn.disabled = true;
         downloadAllBtn.disabled = true;
         batchWrap.classList.add('visible');
@@ -1315,6 +1871,13 @@ app.get('/receive', (req, res) => {
       ws.onmessage = async (event) => {
         try {
           const msg = JSON.parse(event.data);
+          if (msg.type === 'REGISTERED') {
+            localStorage.setItem(DEVICE_ID_KEY, msg.deviceId);
+            localStorage.setItem(DEVICE_NAME_KEY, msg.displayName);
+            deviceIdentity.style.display = 'block';
+            myDeviceNameEl.textContent = msg.displayName;
+            return;
+          }
           if (msg.type === 'NOTIFY_BATCH') {
             await handleBatch(msg);
             return;
@@ -1346,11 +1909,11 @@ server.on('upgrade', (request, socket, head) => {
 
   if (pathname === '/ws/phone') {
     wssPhone.handleUpgrade(request, socket, head, (ws) => {
-      trackSocket(ws, activePhones, 'Phone app');
+      setupDeviceSocket(ws, 'phone', 'Phone app');
     });
   } else if (pathname === '/ws/receiver') {
     wssReceiver.handleUpgrade(request, socket, head, (ws) => {
-      trackSocket(ws, activeReceivers, 'Receiver browser');
+      setupDeviceSocket(ws, 'receiver', 'Receiver browser');
     });
   } else {
     socket.destroy();

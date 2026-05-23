@@ -12,6 +12,9 @@ import java.util.concurrent.TimeUnit
 class AirReceiveGatewayClient(
     private val context: Context,
     private val serverUrl: String,
+    private val displayName: String,
+    private val storedDeviceId: String? = null,
+    private val onRegistered: ((deviceId: String, displayName: String) -> Unit)? = null,
     private val onTransferStarted: (fileName: String, fileSize: Long) -> Unit,
     private val onTransferProgress: (bytesRead: Long, totalBytes: Long) -> Unit,
     private val onTransferCompleted: (
@@ -65,6 +68,12 @@ class AirReceiveGatewayClient(
         webSocket = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 Log.d("AirReceiveGateway", "WebSocket connection opened to gateway")
+                val reg = JSONObject().apply {
+                    put("type", "REGISTER")
+                    put("displayName", displayName)
+                    storedDeviceId?.let { put("deviceId", it) }
+                }
+                webSocket.send(reg.toString())
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -72,6 +81,15 @@ class AirReceiveGatewayClient(
                 try {
                     val json = JSONObject(text)
                     val type = json.optString("type")
+                    if (type == "REGISTERED") {
+                        val deviceId = json.optString("deviceId")
+                        val name = json.optString("displayName")
+                        Log.d("AirReceiveGateway", "Registered as $name ($deviceId)")
+                        if (deviceId.isNotEmpty()) {
+                            onRegistered?.invoke(deviceId, name)
+                        }
+                        return
+                    }
                     if (type == "NOTIFY_UPLOAD") {
                         val fileId = json.getString("id")
                         val fileName = json.getString("name")
