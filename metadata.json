@@ -1,0 +1,6 @@
+{
+  "name": "AirReceive",
+  "description": "Receive photos sent by iOS devices over local Wi-Fi instantly, simulating AirDrop.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
