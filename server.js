@@ -900,12 +900,12 @@ app.get('/to-android', (req, res) => {
   <style>
     ${macDesignCss('#30d158')}
 
-    .card {
+    .to-android-card {
       backdrop-filter: blur(40px) saturate(180%);
       -webkit-backdrop-filter: blur(40px) saturate(180%);
       padding: 32px;
       text-align: center;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+      box-shadow: 0 8px 24px var(--mac-shadow);
     }
 
     .logo-container {
@@ -915,8 +915,8 @@ app.get('/to-android', (req, res) => {
       width: 64px;
       height: 64px;
       border-radius: 50%;
-      background: #30d158;
-      box-shadow: 0 0 20px rgba(16, 185, 129, 0.4);
+      background: var(--mac-green);
+      box-shadow: 0 4px 16px color-mix(in srgb, var(--mac-green) 35%, transparent);
       margin-bottom: 16px;
     }
 
@@ -944,19 +944,20 @@ app.get('/to-android', (req, res) => {
     }
 
     /* Drag Drop Area */
-    .drop-zone {
+    .to-android-page .drop-zone {
       border: 2px dashed var(--border-color);
-      background-color: rgba(22, 27, 34, 0.5);
-      border-radius: 16px;
+      background-color: var(--mac-hover);
+      border-radius: var(--mac-radius-lg);
       padding: 30px 16px;
       cursor: pointer;
-      transition: all 0.25s ease;
+      transition: border-color 0.2s, background-color 0.2s;
       position: relative;
     }
 
-    .drop-zone:hover, .drop-zone.drag-over {
+    .to-android-page .drop-zone:hover,
+    .to-android-page .drop-zone.drag-over {
       border-color: var(--primary);
-      background-color: rgba(16, 185, 129, 0.04);
+      background-color: color-mix(in srgb, var(--primary) 8%, var(--mac-input-bg));
     }
 
     .drop-zone-text {
@@ -1023,27 +1024,28 @@ app.get('/to-android', (req, res) => {
       animation: fadeInUp 0.3s ease;
     }
 
-    .toast-success {
-      background-color: rgba(16, 185, 129, 0.12);
-      border: 1px solid rgba(16, 185, 129, 0.25);
-      color: #a7f3d0;
+    .to-android-page .toast-success {
+      background-color: var(--toast-success-bg);
+      border: 1px solid var(--border-color);
+      color: var(--toast-success-text);
     }
 
-    .toast-error {
-      background-color: rgba(239, 68, 68, 0.12);
-      border: 1px solid rgba(239, 68, 68, 0.25);
-      color: #fecaca;
+    .to-android-page .toast-error {
+      background-color: var(--toast-error-bg);
+      border: 1px solid var(--border-color);
+      color: var(--toast-error-text);
     }
 
     /* Render Instructions */
-    .instructions {
+    .to-android-page .instructions {
       text-align: left;
-      background-color: rgba(30, 41, 59, 0.3);
+      background-color: var(--mac-input-bg);
       border: 1px solid var(--border-color);
-      border-radius: 12px;
+      border-radius: var(--mac-radius);
       padding: 16px 20px;
       margin-top: 24px;
       font-size: 13px;
+      color: var(--text-muted);
     }
 
     .instructions-title {
@@ -1076,20 +1078,30 @@ app.get('/to-android', (req, res) => {
       margin-bottom: 0;
     }
 
-    code {
+    .to-android-page code {
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-      background-color: rgba(255,255,255,0.06);
+      background-color: var(--mac-hover);
       padding: 2px 6px;
       border-radius: 4px;
-      color: var(--accent);
+      color: var(--primary);
       font-size: 11.5px;
+      word-break: break-all;
     }
 
-    .footer {
+    .to-android-page .instructions strong {
+      color: var(--text-main);
+    }
+
+    .to-android-page .footer {
       font-size: 11px;
-      color: #484f58;
+      color: var(--text-muted);
       margin-top: 32px;
       text-align: center;
+      line-height: 1.45;
+    }
+
+    .to-android-page .device-empty strong {
+      color: var(--text-main);
     }
 
     @keyframes fadeInUp {
@@ -1106,8 +1118,8 @@ app.get('/to-android', (req, res) => {
 <body>
   <div class="page-shell">
     ${macSiteHeaderHtml('android')}
-  <div class="container">
-    <div class="card">
+  <div class="container to-android-page">
+    <div class="card to-android-card">
       <div class="logo-container">
         <!-- Photo/Image transfer vector icon -->
         <svg viewBox="0 0 24 24">
@@ -1196,6 +1208,26 @@ app.get('/to-android', (req, res) => {
     let selectedPhoneId = null;
 
     urlPlaceholder.textContent = window.location.origin;
+
+    // #region agent log
+    function __logToAndroidThemeDiag(hypothesisId) {
+      const el = document.getElementById('dropZone');
+      const ins = document.querySelector('.to-android-page .instructions');
+      const toast = document.getElementById('successToast');
+      const dz = el ? getComputedStyle(el) : null;
+      const insS = ins ? getComputedStyle(ins) : null;
+      const toastS = toast ? getComputedStyle(toast) : null;
+      fetch('http://127.0.0.1:7427/ingest/e9f47ee5-3ad4-471b-aaa3-2e53e96becd0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c78bc5'},body:JSON.stringify({sessionId:'c78bc5',location:'server.js:to-android',message:'theme diagnostic',hypothesisId:hypothesisId||'L',runId:'post-fix',timestamp:Date.now(),data:{theme:document.documentElement.getAttribute('data-theme'),dropZoneBg:dz&&dz.backgroundColor,dropZoneColor:dz&&dz.color,instructionsBg:insS&&insS.backgroundColor,toastColor:toastS&&toastS.color,toastBg:toastS&&toastS.backgroundColor}})}).catch(function(){});
+    }
+    document.addEventListener('DOMContentLoaded', function() { __logToAndroidThemeDiag('L-init'); });
+    (function() {
+      var orig = window.__toggleAirReceiveTheme;
+      window.__toggleAirReceiveTheme = function() {
+        orig();
+        __logToAndroidThemeDiag('L-toggle');
+      };
+    })();
+    // #endregion
 
     function updateDropZoneEnabled() {
       dropZone.classList.toggle('disabled', !selectedPhoneId);
