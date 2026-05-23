@@ -33,9 +33,11 @@ When your phone and the sender are on the same Wi‑Fi network, the app starts a
 - In the **Home** gallery, tap **Save all** to copy every image to `Pictures/AirReceive`, or use the save icon on a grid card / **Save to Photos** in fullscreen preview.
 - Non-image files (PDF, etc.) can be shared from the app but are not written to the Photos library.
 
-### Public gateway mode (optional)
+### Public gateway mode (default for sending)
 
-For senders who are **not** on the same network, deploy the included gateway server (e.g. on [Render](https://render.com)). The gateway:
+**By default**, the Android app uses the **free AirReceive gateway** (`https://airreceive-repo.onrender.com`) so the **Send** tab can pick online receivers and transfer across networks without setup. In **Settings**, choose **Local Wi‑Fi only** to switch back to same-network send only.
+
+For your own deployment or senders who are **not** on the same network, you can also deploy the included gateway server (e.g. on [Render](https://render.com)). The gateway:
 
 1. Serves a web UI where anyone can drag-and-drop or select an image.
 2. Accepts uploads via `POST /upload` and stores them temporarily.
@@ -56,7 +58,7 @@ The app uses a bottom navigation bar:
 | Tab | Purpose |
 |-----|---------|
 | **Home** (gallery) | View received files; **Save all** or per-image **Save to Photos**; tap to preview |
-| **Send** | **Local Wi‑Fi:** send to another device’s portal URL; **Gateway:** pick online receiver |
+| **Send** | **Default:** free cloud gateway — pick online receiver; **Local Wi‑Fi only** (Settings): send via peer portal URL |
 | **Settings** | Start/stop receiver; local mode shows compact QR help + optional gateway expander; link to Support |
 | **Support** | Thank Maverick — Buy Me a Coffee button and QR code |
 

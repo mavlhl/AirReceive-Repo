@@ -38,6 +38,10 @@ fun SendScreen(
     onSendPhotosGateway: (List<android.net.Uri>) -> Unit,
     onSendPhotosLocal: (List<android.net.Uri>) -> Unit
 ) {
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        viewModel.ensureHostedGatewayForSend()
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()

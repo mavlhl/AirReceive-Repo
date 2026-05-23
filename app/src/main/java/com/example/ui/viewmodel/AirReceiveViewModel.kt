@@ -58,7 +58,7 @@ data class ServerState(
     val networkName: String = "Local Network",
     val activeTransfer: ActiveTransfer? = null,
     val customUrl: String = "",
-    val gatewaySelection: GatewaySelection = GatewaySelection.NONE,
+    val gatewaySelection: GatewaySelection = GatewaySelection.HOSTED,
     val onlineReceivers: List<GatewayReceiverDevice> = emptyList(),
     val selectedReceiverId: String? = null,
     val localSendTargetUrl: String = ""
@@ -75,6 +75,10 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
 
     companion object {
         const val HOSTED_GATEWAY_URL = "https://airreceive-repo.onrender.com"
+        private const val PREF_GATEWAY_MODE = "gateway_mode"
+        private const val GATEWAY_MODE_HOSTED = "hosted"
+        private const val GATEWAY_MODE_LOCAL = "local"
+        private const val GATEWAY_MODE_CUSTOM = "custom"
 
         fun gatewaySelectionForUrl(url: String): GatewaySelection {
             val normalized = url.trim().removeSuffix("/")
@@ -129,6 +133,8 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         if (prefs.getString("custom_url", "").orEmpty().contains("run.app")) {
             prefs.edit().remove("custom_url").apply()
         }
+
+        ensureDefaultGateway()
 
         // Monitor network and setup Server state
         refreshNetworkInfo()
@@ -374,6 +380,39 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    private fun ensureDefaultGateway() {
+        when (prefs.getString(PREF_GATEWAY_MODE, GATEWAY_MODE_HOSTED)) {
+            GATEWAY_MODE_HOSTED -> {
+                val current = prefs.getString("custom_url", "") ?: ""
+                if (!current.equals(HOSTED_GATEWAY_URL, ignoreCase = true)) {
+                    prefs.edit()
+                        .putString("custom_url", HOSTED_GATEWAY_URL)
+                        .putBoolean("gateway_use_hosted", true)
+                        .apply()
+                }
+            }
+            GATEWAY_MODE_LOCAL -> { /* user chose local Wi-Fi only */ }
+            GATEWAY_MODE_CUSTOM -> { /* keep saved custom URL */ }
+        }
+    }
+
+    /** Ensures the free hosted gateway is active when Send is used (default mode). */
+    fun ensureHostedGatewayForSend() {
+        if (prefs.getString(PREF_GATEWAY_MODE, GATEWAY_MODE_HOSTED) != GATEWAY_MODE_HOSTED) return
+        if (_serverState.value.customUrl.isEmpty()) {
+            prefs.edit()
+                .putString("custom_url", HOSTED_GATEWAY_URL)
+                .putBoolean("gateway_use_hosted", true)
+                .apply()
+            refreshNetworkInfo()
+            if (!_serverState.value.isRunning) {
+                startServer()
+            } else {
+                restartServer()
+            }
+        }
+    }
+
     fun applyHostedGateway() {
         setCustomUrl(HOSTED_GATEWAY_URL)
     }
@@ -390,9 +429,15 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
             trimmed
         }.removeSuffix("/")
         val previous = prefs.getString("custom_url", "") ?: ""
+        val gatewayMode = when {
+            formatted.isEmpty() -> GATEWAY_MODE_LOCAL
+            formatted.equals(HOSTED_GATEWAY_URL, ignoreCase = true) -> GATEWAY_MODE_HOSTED
+            else -> GATEWAY_MODE_CUSTOM
+        }
         prefs.edit()
             .putString("custom_url", formatted)
-            .putBoolean("gateway_use_hosted", formatted.equals(HOSTED_GATEWAY_URL, ignoreCase = true))
+            .putBoolean("gateway_use_hosted", gatewayMode == GATEWAY_MODE_HOSTED)
+            .putString(PREF_GATEWAY_MODE, gatewayMode)
             .apply()
         refreshNetworkInfo()
         // Reconnect WebSocket when the gateway URL changes (saving settings does not do this on its own).
