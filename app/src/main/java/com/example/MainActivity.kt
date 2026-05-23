@@ -25,12 +25,12 @@ import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
-import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.statusBars
-import androidx.compose.foundation.layout.navigationBars
-import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -82,6 +82,7 @@ import com.example.ui.theme.MacRedContainer
 import com.example.ui.theme.MacShapeButton
 import com.example.ui.theme.MacShapeLarge
 import com.example.ui.theme.MacShapeMedium
+import com.example.ui.theme.MacSpace1
 import com.example.ui.theme.MacSpace2
 import com.example.ui.theme.MacSystemBlue
 import com.example.ui.theme.MacSystemGreen
@@ -205,16 +206,6 @@ fun AirReceiveApp(
     val density = androidx.compose.ui.platform.LocalDensity.current
   val statusTop = WindowInsets.statusBars.getTop(density)
   val navBottom = WindowInsets.navigationBars.getBottom(density)
-  LaunchedEffect(statusTop, navBottom) {
-    // #region agent log
-    DebugAgentLog.log(
-      location = "MainActivity.kt:AirReceiveApp",
-      message = "WindowInsets measured",
-      hypothesisId = "A",
-      data = mapOf("statusTopPx" to statusTop, "navBottomPx" to navBottom),
-    )
-    // #endregion
-  }
     val serverState by viewModel.serverState.collectAsStateWithLifecycle()
     val photoList by viewModel.receivedPhotos.collectAsStateWithLifecycle()
     var selectedPhotoForView by remember { mutableStateOf<ReceivedPhoto?>(null) }
@@ -225,21 +216,56 @@ fun AirReceiveApp(
     val needsGatewaySetup = serverState.customUrl.isEmpty()
     val showReceiverHint = !serverState.isRunning
 
+    val layoutInsets = WindowInsets.safeDrawing.asPaddingValues()
+    // #region agent log
+    LaunchedEffect(statusTop, navBottom, layoutInsets) {
+        DebugAgentLog.log(
+            location = "MainActivity.kt:ColumnLayout",
+            message = "Layout insets (post-fix)",
+            hypothesisId = "C",
+            runId = "post-fix",
+            data =
+                mapOf(
+                    "statusTopPx" to statusTop,
+                    "navBottomPx" to navBottom,
+                    "safeTopDp" to layoutInsets.calculateTopPadding().value,
+                    "safeBottomDp" to layoutInsets.calculateBottomPadding().value,
+                ),
+        )
+    }
+    // #endregion
+
     Box(modifier = Modifier.fillMaxSize()) {
-    Scaffold(
-        modifier = Modifier.fillMaxSize(),
-        contentWindowInsets = WindowInsets.safeDrawing,
-        topBar = {
+        Column(
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background),
+        ) {
             AirReceiveTopBar(
-                modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top)),
+                modifier = Modifier.statusBarsPadding(),
                 isServerRunning = serverState.isRunning,
                 isDarkTheme = darkTheme,
                 onToggleTheme = onToggleTheme,
             )
-        },
-        bottomBar = {
+            AirReceiveNavHost(
+                navController = navController,
+                modifier =
+                    Modifier
+                        .weight(1f)
+                        .fillMaxWidth(),
+                viewModel = viewModel,
+                serverState = serverState,
+                photoList = photoList,
+                selectedPhotoForView = selectedPhotoForView,
+                onPhotoSelected = { selectedPhotoForView = it },
+            )
             MacSegmentedNavBar(
-                modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom)),
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = MacSpace1, vertical = MacSpace1),
                 items =
                     listOf(
                         MacNavItem(
@@ -272,35 +298,7 @@ fun AirReceiveApp(
                     navController.navigate(route) { launchSingleTop = true }
                 },
             )
-        },
-        containerColor = MaterialTheme.colorScheme.background
-    ) { innerPadding ->
-        // #region agent log
-        LaunchedEffect(innerPadding) {
-            DebugAgentLog.log(
-                location = "MainActivity.kt:Scaffold",
-                message = "Scaffold innerPadding",
-                hypothesisId = "B",
-                data =
-                    mapOf(
-                        "top" to innerPadding.calculateTopPadding().value,
-                        "bottom" to innerPadding.calculateBottomPadding().value,
-                    ),
-            )
         }
-        // #endregion
-        AirReceiveNavHost(
-            navController = navController,
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding),
-            viewModel = viewModel,
-            serverState = serverState,
-            photoList = photoList,
-            selectedPhotoForView = selectedPhotoForView,
-            onPhotoSelected = { selectedPhotoForView = it }
-        )
-    }
 
     selectedPhotoForView?.let { photo ->
         FullscreenPhotoViewer(

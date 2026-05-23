@@ -11,7 +11,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.LightMode
-import androidx.compose.material3.CenterAlignedTopAppBar
+import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -36,39 +36,39 @@ fun AirReceiveTopBar(
   onToggleTheme: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
-  CenterAlignedTopAppBar(
+  TopAppBar(
     modifier = modifier,
+    navigationIcon = {
+      Image(
+        painter = painterResource(R.drawable.ic_app_logo),
+        contentDescription = "AirReceive logo",
+        modifier = Modifier
+          .padding(start = 4.dp)
+          .size(32.dp),
+      )
+    },
     title = {
-      Row(
-        verticalAlignment = Alignment.CenterVertically,
-        modifier = Modifier.fillMaxWidth(0.85f),
-      ) {
-        Image(
-          painter = painterResource(R.drawable.ic_app_logo),
-          contentDescription = "AirReceive logo",
-          modifier = Modifier.size(28.dp),
-        )
-        Spacer(modifier = Modifier.width(8.dp))
-        Column(modifier = Modifier.weight(1f)) {
-          Row(verticalAlignment = Alignment.CenterVertically) {
-            MacStatusDot(isActive = isServerRunning, size = 7.dp)
-            Spacer(modifier = Modifier.width(6.dp))
-            Text(
-              text = "AirReceive",
-              style = MaterialTheme.typography.titleMedium,
-              color = MaterialTheme.colorScheme.onSurface,
-            )
-          }
+      Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+          MacStatusDot(isActive = isServerRunning, size = 7.dp)
+          Spacer(modifier = Modifier.width(6.dp))
           Text(
-            text = "Support Maverick for a virtual cookie!",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.Medium,
+            text = "AirReceive",
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
           )
         }
+        Text(
+          text = "Support Maverick for a virtual cookie!",
+          style = MaterialTheme.typography.labelMedium,
+          color = MaterialTheme.colorScheme.onSurfaceVariant,
+          fontSize = 10.sp,
+          fontWeight = FontWeight.Medium,
+          maxLines = 1,
+          overflow = TextOverflow.Ellipsis,
+        )
       }
     },
     actions = {
@@ -81,7 +81,7 @@ fun AirReceiveTopBar(
       }
     },
     colors =
-      TopAppBarDefaults.centerAlignedTopAppBarColors(
+      TopAppBarDefaults.topAppBarColors(
         containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
         titleContentColor = MaterialTheme.colorScheme.onSurface,
       ),
