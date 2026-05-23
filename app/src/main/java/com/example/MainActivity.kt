@@ -24,6 +24,13 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -59,6 +66,7 @@ import androidx.lifecycle.repeatOnLifecycle
 import coil.compose.AsyncImage
 import com.example.data.ReceivedPhoto
 import com.example.server.GatewayReceiverDevice
+import com.example.ui.components.AirReceiveTopBar
 import com.example.ui.components.MacNavItem
 import com.example.ui.components.MacPrimaryButton
 import com.example.ui.components.MacPrimaryButtonText
@@ -83,7 +91,9 @@ import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.*
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.util.DebugAgentLog
 import com.example.util.DonateLinks
+import com.example.util.rememberDarkThemePreference
 import com.example.util.GallerySaver
 import com.example.util.QrCodeGenerator
 import kotlinx.coroutines.flow.collectLatest
@@ -99,12 +109,13 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MyApplicationTheme(darkTheme = true) {
+            val (darkTheme, setDarkTheme) = rememberDarkThemePreference()
+            MyApplicationTheme(darkTheme = darkTheme) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = MacContentBg,
+                    color = MaterialTheme.colorScheme.background,
                 ) {
-                    AirReceiveApp(viewModel)
+                    AirReceiveApp(viewModel, darkTheme = darkTheme, onToggleTheme = { setDarkTheme(!darkTheme) })
                 }
             }
         }
@@ -185,8 +196,25 @@ class MainActivity : ComponentActivity() {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AirReceiveApp(viewModel: AirReceiveViewModel) {
+fun AirReceiveApp(
+    viewModel: AirReceiveViewModel,
+    darkTheme: Boolean,
+    onToggleTheme: () -> Unit,
+) {
     val context = LocalContext.current
+    val density = androidx.compose.ui.platform.LocalDensity.current
+  val statusTop = WindowInsets.statusBars.getTop(density)
+  val navBottom = WindowInsets.navigationBars.getBottom(density)
+  LaunchedEffect(statusTop, navBottom) {
+    // #region agent log
+    DebugAgentLog.log(
+      location = "MainActivity.kt:AirReceiveApp",
+      message = "WindowInsets measured",
+      hypothesisId = "A",
+      data = mapOf("statusTopPx" to statusTop, "navBottomPx" to navBottom),
+    )
+    // #endregion
+  }
     val serverState by viewModel.serverState.collectAsStateWithLifecycle()
     val photoList by viewModel.receivedPhotos.collectAsStateWithLifecycle()
     var selectedPhotoForView by remember { mutableStateOf<ReceivedPhoto?>(null) }
@@ -199,32 +227,19 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
 
     Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
+        modifier = Modifier.fillMaxSize(),
+        contentWindowInsets = WindowInsets.safeDrawing,
         topBar = {
-            CenterAlignedTopAppBar(
-                modifier = Modifier.height(52.dp),
-                title = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center,
-                    ) {
-                        MacStatusDot(isActive = serverState.isRunning)
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            text = "AirReceive",
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                    }
-                },
-                colors =
-                    TopAppBarDefaults.centerAlignedTopAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-                        titleContentColor = MaterialTheme.colorScheme.onSurface,
-                    ),
+            AirReceiveTopBar(
+                modifier = Modifier.windowInsetsPadding(WindowInsets.statusBars.only(WindowInsetsSides.Top)),
+                isServerRunning = serverState.isRunning,
+                isDarkTheme = darkTheme,
+                onToggleTheme = onToggleTheme,
             )
         },
         bottomBar = {
             MacSegmentedNavBar(
+                modifier = Modifier.windowInsetsPadding(WindowInsets.navigationBars.only(WindowInsetsSides.Bottom)),
                 items =
                     listOf(
                         MacNavItem(
@@ -260,6 +275,20 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { innerPadding ->
+        // #region agent log
+        LaunchedEffect(innerPadding) {
+            DebugAgentLog.log(
+                location = "MainActivity.kt:Scaffold",
+                message = "Scaffold innerPadding",
+                hypothesisId = "B",
+                data =
+                    mapOf(
+                        "top" to innerPadding.calculateTopPadding().value,
+                        "bottom" to innerPadding.calculateBottomPadding().value,
+                    ),
+            )
+        }
+        // #endregion
         AirReceiveNavHost(
             navController = navController,
             modifier = Modifier

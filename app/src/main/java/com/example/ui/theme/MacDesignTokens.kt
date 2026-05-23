@@ -23,6 +23,17 @@ val MacBlueContainer = Color(0xFF0A3D7A)
 val MacRedContainer = Color(0x33FF453A)
 val MacGreenContainer = Color(0x3330D158)
 
+// Light mode
+val MacLightWindowBg = Color(0xFFFFFFFF)
+val MacLightContentBg = Color(0xFFF2F2F7)
+val MacLightSecondaryBg = Color(0xFFFFFFFF)
+val MacLightTertiaryBg = Color(0xFFE5E5EA)
+val MacLightLabelPrimary = Color(0xFF000000)
+val MacLightLabelSecondary = Color(0x993C3C43)
+val MacLightGlassFill = Color(0xF2FFFFFF)
+val MacLightGlassBorder = Color(0x1A000000)
+val MacLightSeparator = Color(0x4A3C3C43)
+
 val MacRadiusSmall = 8.dp
 val MacRadiusMedium = 12.dp
 val MacRadiusLarge = 16.dp

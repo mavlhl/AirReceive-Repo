@@ -32,5 +32,19 @@ object MacWebStyles {
           margin: 0;
           padding: 0;
         }
+        [data-theme="light"] {
+          --mac-window: #ffffff;
+          --mac-content: #f2f2f7;
+          --mac-secondary: #ffffff;
+          --mac-tertiary: #e5e5ea;
+          --mac-label: #000000;
+          --mac-label-secondary: rgba(60, 60, 67, 0.6);
+          --mac-glass: rgba(255, 255, 255, 0.82);
+        }
+        """
+
+    const val THEME_SCRIPT =
+        """
+        (function(){try{var k='airreceive-theme';var t=localStorage.getItem(k);var d=t?t==='dark':true;document.documentElement.setAttribute('data-theme',d?'dark':'light');window.__toggleAirReceiveTheme=function(){var n=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',n);localStorage.setItem(k,n);};}catch(e){}})();
         """
 }

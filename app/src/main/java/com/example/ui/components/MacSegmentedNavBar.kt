@@ -20,11 +20,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
-import com.example.ui.theme.MacSecondaryBg
 import com.example.ui.theme.MacShapeSmall
 import com.example.ui.theme.MacSpace1
 import com.example.ui.theme.MacSystemBlue
-import com.example.ui.theme.MacTertiaryBg
 
 data class MacNavItem(
   val route: String,
@@ -47,7 +45,7 @@ fun MacSegmentedNavBar(
         .fillMaxWidth()
         .padding(horizontal = MacSpace1, vertical = MacSpace1)
         .clip(MacShapeSmall)
-        .background(MacSecondaryBg)
+        .background(MaterialTheme.colorScheme.surfaceVariant)
         .padding(4.dp),
     horizontalArrangement = Arrangement.SpaceEvenly,
   ) {
@@ -58,7 +56,10 @@ fun MacSegmentedNavBar(
           Modifier
             .weight(1f)
             .clip(RoundedCornerShape(8.dp))
-            .background(if (selected) MacTertiaryBg else MacSecondaryBg)
+            .background(
+              if (selected) MaterialTheme.colorScheme.surface
+              else MaterialTheme.colorScheme.surfaceVariant,
+            )
             .clickable { onItemSelected(item.route) }
             .padding(vertical = 8.dp),
         contentAlignment = Alignment.Center,

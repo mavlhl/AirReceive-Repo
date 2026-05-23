@@ -267,11 +267,12 @@ class AirReceiveServer(
     companion object {
         private val HTML_CONTENT = """
         <!DOCTYPE html>
-        <html lang="en">
+        <html lang="en" data-theme="dark">
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
             <title>AirReceive - Send Photos</title>
+            <script>${com.example.ui.theme.MacWebStyles.THEME_SCRIPT}</script>
             <style>
                 ${com.example.ui.theme.MacWebStyles.ROOT_VARS}
                 ${com.example.ui.theme.MacWebStyles.BODY_BASE}
@@ -433,9 +434,15 @@ class AirReceiveServer(
                 .status-uploading { background-color: rgba(0, 122, 255, 0.15); color: var(--mac-blue); }
                 .status-completed { background-color: rgba(48, 209, 88, 0.15); color: var(--mac-green); }
                 .status-failed { background-color: rgba(255, 69, 58, 0.15); color: var(--mac-red); }
+                .theme-toggle-portal {
+                    position: fixed; top: 12px; right: 12px; z-index: 10;
+                    border: 1px solid rgba(255,255,255,0.12); background: var(--mac-glass);
+                    border-radius: 8px; padding: 8px 10px; cursor: pointer; font-size: 16px;
+                }
             </style>
         </head>
         <body>
+            <button type="button" class="theme-toggle-portal" onclick="window.__toggleAirReceiveTheme()">☀️</button>
             <div class="container">
                 <div class="logo-container">
                     <div class="airdrop-icon">

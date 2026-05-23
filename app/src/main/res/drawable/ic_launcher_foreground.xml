@@ -4,61 +4,27 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-
-    <!-- Subtle ambient glowing backing shadow for the logo -->
     <path
-        android:fillColor="#381E72"
-        android:fillAlpha="0.35"
-        android:pathData="M 54 26 A 28 28 0 1 1 53.9 26 Z" />
-
-    <!-- Upper outer wireless wave arc -->
+        android:fillColor="#007AFF"
+        android:pathData="M54,20 A34,34 0 1,1 53.9,20 Z" />
     <path
         android:fillColor="#00000000"
-        android:strokeColor="#D0BCFF"
-        android:strokeWidth="3.5"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="3"
         android:strokeLineCap="round"
-        android:strokeAlpha="0.85"
-        android:pathData="M 32 34 A 28 28 0 0 1 76 34" />
-
-    <!-- Inner wireless wave arc -->
+        android:strokeAlpha="0.35"
+        android:pathData="M34,42 A24,24 0 0,1 74,42" />
     <path
         android:fillColor="#00000000"
-        android:strokeColor="#D0BCFF"
+        android:strokeColor="#FFFFFF"
         android:strokeWidth="3.5"
         android:strokeLineCap="round"
-        android:strokeAlpha="0.95"
-        android:pathData="M 40 42 A 18 18 0 0 1 68 42" />
-
-    <!-- Center active wireless pulse point -->
+        android:pathData="M40,48 A18,18 0 0,1 68,48" />
     <path
-        android:fillColor="#E8DEF8"
-        android:pathData="M 54 46 A 4 4 0 1 1 53.9 46 Z" />
-
-    <!-- Central elegant Document/Photo container glyph representing received files -->
-    <!-- Base page body -->
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,52 L54,72 L68,72 L68,68 L58,68 L58,52 Z" />
     <path
-        android:fillColor="#E8DEF8"
-        android:pathData="M 42 48 L 56 48 L 66 58 L 66 74 C 66 75.1 65.1 76 64 76 L 42 76 C 40.9 76 40 75.1 40 74 L 40 50 C 40 48.9 40.9 48 42 48 Z" />
-
-    <!-- Folded corner overlay -->
-    <path
-        android:fillColor="#D0BCFF"
-        android:pathData="M 56 48 L 56 58 L 66 58 Z" />
-
-    <!-- Custom image placeholder symbol inside the page (aesthetic landscape photo grid) -->
-    <!-- Represents the focus on photo transfers -->
-    <path
-        android:fillColor="#1D192B"
-        android:pathData="M 44 60 L 52 68 L 50 70 L 44 70 Z" />
-    <path
-        android:fillColor="#1D192B"
-        android:pathData="M 49 61 L 62 69 L 58 72 L 49 72 Z" />
-    <path
-        android:fillColor="#381E72"
-        android:pathData="M 45 54 A 1.5 1.5 0 1 1 44.9 54 Z" />
-
-    <!-- Tiny decorative star to denote clean design quality -->
-    <path
-        android:fillColor="#D0BCFF"
-        android:pathData="M 72 50 L 73.2 52.8 L 76 53.2 L 74 55 L 74.6 57.8 L 72 56.4 L 69.4 57.8 L 70 55 L 68 53.2 L 70.8 52.8 Z" />
+        android:fillColor="#FFFFFF"
+        android:fillAlpha="0.9"
+        android:pathData="M46,56 L46,64 L50,64 L50,56 Z" />
 </vector>

@@ -467,9 +467,29 @@ app.get('/download/:id', (req, res) => {
   });
 });
 
+function macThemeBootScript() {
+  return `(function(){try{var k='airreceive-theme';var t=localStorage.getItem(k);var d=t? t==='dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.setAttribute('data-theme',d?'dark':'light');window.__toggleAirReceiveTheme=function(){var next=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',next);localStorage.setItem(k,next);var btn=document.getElementById('theme-toggle-btn');if(btn)btn.textContent=next==='dark'?'☀️':'🌙';fetch('http://127.0.0.1:7427/ingest/e9f47ee5-3ad4-471b-aaa3-2e53e96becd0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c78bc5'},body:JSON.stringify({sessionId:'c78bc5',location:'server.js:theme',message:'theme toggled',hypothesisId:'W',data:{theme:next},timestamp:Date.now()})}).catch(function(){});};}catch(e){}})();`;
+}
+
+function macSiteHeaderHtml(activeNav) {
+  return `
+    <header class="site-header">
+      <div class="site-brand">
+        <span class="site-logo" aria-hidden="true">◉</span>
+        <div>
+          <div class="site-title">AirReceive</div>
+          <div class="site-subtitle">Support Maverick for a virtual cookie!</div>
+        </div>
+      </div>
+      <button type="button" id="theme-toggle-btn" class="theme-toggle" onclick="window.__toggleAirReceiveTheme()">☀️</button>
+    </header>
+    ${gatewayNavHtml(activeNav)}
+  `;
+}
+
 function macDesignCss(accent = '#007aff') {
   return `
-    :root {
+    :root, [data-theme="dark"] {
       color-scheme: dark light;
       --mac-window: #000000;
       --mac-content: #1c1c1e;
@@ -492,6 +512,18 @@ function macDesignCss(accent = '#007aff') {
       --text-main: var(--mac-label);
       --text-muted: var(--mac-label-secondary);
     }
+    [data-theme="light"] {
+      --mac-window: #ffffff;
+      --mac-content: #f2f2f7;
+      --mac-secondary: #ffffff;
+      --mac-tertiary: #e5e5ea;
+      --mac-label: #000000;
+      --mac-label-secondary: rgba(60, 60, 67, 0.6);
+      --mac-glass: rgba(255, 255, 255, 0.82);
+      --border-color: rgba(0, 0, 0, 0.08);
+      --text-main: var(--mac-label);
+      --text-muted: var(--mac-label-secondary);
+    }
     body {
       margin: 0;
       background: var(--mac-window);
@@ -499,10 +531,26 @@ function macDesignCss(accent = '#007aff') {
       font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
       min-height: 100vh;
       display: flex;
-      align-items: center;
-      justify-content: center;
+      flex-direction: column;
+      align-items: stretch;
     }
-    .container { width: 90%; max-width: 560px; margin: 24px auto; }
+    .page-shell { width: 100%; max-width: 640px; margin: 0 auto; padding: 16px 16px 32px; box-sizing: border-box; }
+    .site-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 12px; padding: 8px 4px;
+    }
+    .site-brand { display: flex; align-items: center; gap: 10px; }
+    .site-logo {
+      width: 32px; height: 32px; border-radius: 8px; background: var(--mac-blue); color: #fff;
+      display: inline-flex; align-items: center; justify-content: center; font-size: 18px;
+    }
+    .site-title { font-size: 17px; font-weight: 600; color: var(--text-main); }
+    .site-subtitle { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .theme-toggle {
+      border: 1px solid var(--border-color); background: var(--mac-secondary);
+      border-radius: 8px; padding: 8px 10px; cursor: pointer; font-size: 16px;
+    }
+    .container { width: 100%; max-width: 560px; margin: 0 auto; }
     .card {
       background: var(--card-bg);
       backdrop-filter: blur(40px) saturate(180%);
@@ -558,23 +606,36 @@ function gatewayNavHtml(activeNav) {
 
 function gatewayPageHtml({ title, activeNav, accent = '#007aff', extraCss = '', bodyHtml }) {
   return `<!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title}</title>
+  <script>${macThemeBootScript()}</script>
   <style>
     ${macDesignCss(accent)}
     ${extraCss}
   </style>
 </head>
 <body>
-  <div class="container">
-    ${gatewayNavHtml(activeNav)}
-    ${bodyHtml}
+  <div class="page-shell">
+    ${macSiteHeaderHtml(activeNav)}
+    <div class="container">
+      ${bodyHtml}
+    </div>
   </div>
 </body>
 </html>`;
+}
+
+function macStandaloneChrome(activeNav, accent) {
+  return `<script>${macThemeBootScript()}</script>
+<style>${macDesignCss(accent)}</style>
+<div class="page-shell">${macSiteHeaderHtml(activeNav)}<div class="container">`;
+}
+
+function macStandaloneChromeEnd() {
+  return `</div></div>`;
 }
 
 // Hub — pick an action (no upload on this page)
@@ -689,49 +750,21 @@ app.get('/support', (req, res) => {
 app.get('/to-android', (req, res) => {
   res.send(`
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AirReceive — Send to Android</title>
+  <script>${macThemeBootScript()}</script>
   <style>
-    :root {
-      --bg-color: #1c1c1e;
-      --card-bg: rgba(44, 44, 46, 0.72);
-      --border-color: rgba(255, 255, 255, 0.08);
-      --primary: #30d158;
-      --primary-hover: #28b84c;
-      --text-main: #ffffff;
-      --text-muted: rgba(235, 235, 245, 0.6);
-      --accent: #007aff;
-    }
-
-    body {
-      margin: 0;
-      padding: 0;
-      background-color: #000000;
-      color: var(--text-main);
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
-      min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .container {
-      width: 90%;
-      max-width: 520px;
-      margin: 24px auto;
-    }
+    ${macDesignCss('#30d158')}
 
     .card {
-      background-color: var(--card-bg);
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
+      backdrop-filter: blur(40px) saturate(180%);
+      -webkit-backdrop-filter: blur(40px) saturate(180%);
       padding: 32px;
       text-align: center;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35);
     }
 
     .logo-container {
@@ -1038,9 +1071,9 @@ app.get('/to-android', (req, res) => {
   </style>
 </head>
 <body>
-
+  <div class="page-shell">
+    ${macSiteHeaderHtml('android')}
   <div class="container">
-    ${gatewayNavHtml('android')}
     <div class="card">
       <div class="logo-container">
         <!-- Photo/Image transfer vector icon -->
@@ -1330,6 +1363,8 @@ app.get('/to-android', (req, res) => {
     setInterval(pollStatus, 3000);
     pollStatus();
   </script>
+  </div>
+  </div>
 </body>
 </html>
   `);
@@ -1343,36 +1378,18 @@ const wssReceiver = new WebSocket.Server({ noServer: true });
 app.get('/send', (req, res) => {
   res.send(`
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AirReceive — Send files</title>
+  <script>${macThemeBootScript()}</script>
   <style>
-    :root {
-      --bg-color: #1c1c1e;
-      --card-bg: rgba(44, 44, 46, 0.72);
-      --border-color: rgba(255, 255, 255, 0.08);
-      --primary: #007aff;
-      --text-main: #ffffff;
-      --text-muted: rgba(235, 235, 245, 0.6);
-    }
-    body {
-      margin: 0;
-      background: var(--bg-color);
-      color: var(--text-main);
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .container { width: 90%; max-width: 560px; margin: 24px auto; }
+    ${macDesignCss('#007aff')}
     .card {
-      background: var(--card-bg);
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
       padding: 32px;
+      backdrop-filter: blur(40px) saturate(180%);
+      -webkit-backdrop-filter: blur(40px) saturate(180%);
     }
     h1 { font-size: 24px; margin: 0 0 8px; text-align: center; }
     .tagline { color: var(--text-muted); font-size: 14px; margin-bottom: 20px; text-align: center; }
@@ -1487,17 +1504,12 @@ app.get('/send', (req, res) => {
       font-size: 12px;
       font-weight: 600;
     }
-    .gateway-nav-link:hover { border-color: var(--primary); color: var(--primary); }
-    .gateway-nav-link.active {
-      border-color: var(--primary);
-      color: var(--primary);
-      background: rgba(56, 189, 248, 0.08);
-    }
   </style>
 </head>
 <body>
+  <div class="page-shell">
+    ${macSiteHeaderHtml('send')}
   <div class="container">
-    ${gatewayNavHtml('send')}
     <div class="card">
       <h1>Send files</h1>
       <p class="tagline">Send images and files to another PC or phone on this gateway</p>
@@ -1645,6 +1657,8 @@ app.get('/send', (req, res) => {
     setInterval(refreshDevices, 3000);
     refreshDevices();
   </script>
+  </div>
+  </div>
 </body>
 </html>
   `);
@@ -1654,37 +1668,19 @@ app.get('/send', (req, res) => {
 app.get('/receive', (req, res) => {
   res.send(`
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AirReceive — Receive photos</title>
+  <script>${macThemeBootScript()}</script>
   <style>
-    :root {
-      --bg-color: #1c1c1e;
-      --card-bg: rgba(44, 44, 46, 0.72);
-      --border-color: rgba(255, 255, 255, 0.08);
-      --primary: #007aff;
-      --text-main: #ffffff;
-      --text-muted: rgba(235, 235, 245, 0.6);
-    }
-    body {
-      margin: 0;
-      background: var(--bg-color);
-      color: var(--text-main);
-      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .container { width: 90%; max-width: 520px; margin: 24px auto; }
+    ${macDesignCss('#007aff')}
     .card {
-      background: var(--card-bg);
-      border: 1px solid var(--border-color);
-      border-radius: 12px;
       padding: 32px;
       text-align: center;
+      backdrop-filter: blur(40px) saturate(180%);
+      -webkit-backdrop-filter: blur(40px) saturate(180%);
     }
     h1 { font-size: 24px; margin: 0 0 8px; }
     .tagline { color: var(--text-muted); font-size: 14px; margin-bottom: 20px; }
@@ -1900,33 +1896,12 @@ app.get('/receive', (req, res) => {
       cursor: pointer;
     }
     .utility-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-    .gateway-nav {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      justify-content: center;
-      margin-bottom: 20px;
-    }
-    .gateway-nav-link {
-      padding: 8px 14px;
-      border-radius: 10px;
-      border: 1px solid var(--border-color);
-      color: var(--text-muted);
-      text-decoration: none;
-      font-size: 12px;
-      font-weight: 600;
-    }
-    .gateway-nav-link:hover { border-color: var(--primary); color: var(--primary); }
-    .gateway-nav-link.active {
-      border-color: var(--primary);
-      color: var(--primary);
-      background: rgba(56, 189, 248, 0.08);
-    }
   </style>
 </head>
 <body>
+  <div class="page-shell">
+    ${macSiteHeaderHtml('receive')}
   <div class="container">
-    ${gatewayNavHtml('receive')}
     <div class="card">
       <h1>Receive photos</h1>
       <p class="tagline">Receive on iPhone, PC, or any browser — keep this tab open while sending</p>
@@ -2433,6 +2408,8 @@ app.get('/receive', (req, res) => {
 
     connect();
   </script>
+  </div>
+  </div>
 </body>
 </html>
   `);
