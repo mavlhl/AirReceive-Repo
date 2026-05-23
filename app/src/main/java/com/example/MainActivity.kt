@@ -971,7 +971,7 @@ fun ActiveTransferCard(transfer: ActiveTransfer) {
                             text = when {
                                 isDone -> "Transfer finalized successfully"
                                 isFailed -> "Transfer error"
-                                else -> "Streaming via Wi-Fi..."
+                                else -> "Transferring..."
                             },
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
