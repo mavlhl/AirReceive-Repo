@@ -1,6 +1,6 @@
 # AirReceive
 
-AirReceive is an Android app that lets you receive photos from other devices over the network—similar to Apple’s AirDrop, but aimed at sending from phones, tablets, or desktops to an Android phone.
+AirReceive is an Android app for cross-device photo transfer—similar to Apple’s AirDrop. It can **receive** photos on Android (from iPhone browsers or other devices) and **send** photos from Android to an iPhone via the public gateway.
 
 This repository was originally scaffolded from [Google AI Studio](https://ai.studio); the README and project focus are now on **AirReceive** itself (photo transfer), not the generic AI Studio deploy template. The AI Studio banner and boilerplate instructions have been removed from this file.
 
@@ -9,7 +9,7 @@ This repo contains two parts that work together:
 | Component | Role |
 |-----------|------|
 | **Android app** (`app/`) | Runs on your phone, receives images, keeps an in-app gallery, and can save to the device photo library. |
-| **Public gateway** (`server.js`) | Optional Node.js relay so senders on the internet can upload photos through a web page; the phone is notified and pulls the file down. |
+| **Public gateway** (`server.js`) | Node.js relay: browser ↔ Android (both directions) over WebSockets and temporary file storage. |
 
 ## How it works
 
@@ -26,7 +26,34 @@ For senders who are **not** on the same network, deploy the included gateway ser
 3. Notifies the Android app over a WebSocket (`/ws/phone`).
 4. Lets the app download the file via `GET /download/:id`, then deletes it from the server.
 
-In the app, open **Settings** on the status card and paste your gateway’s public URL (for example `https://your-app.onrender.com`). The status badge on the gateway web page turns green when your phone is connected.
+In the app, open **Settings** on the status card and paste your gateway’s public URL (for example `https://your-app.onrender.com`). The status badge on the gateway home page turns green when your Android phone is connected.
+
+### Gateway URLs
+
+| URL | Purpose |
+|-----|---------|
+| `https://your-app.onrender.com/` | Send photos **to Android** (any browser, including iPhone) |
+| `https://your-app.onrender.com/receive` | Receive photos **on iPhone** (Safari must stay open on this page) |
+
+Uploads use `POST /upload` with form field `target`: `phone` (default, to Android) or `receiver` (to Safari on `/receive`).
+
+### Send from Android to iPhone (gateway)
+
+1. On Android, save your gateway URL in app settings (same as receive mode).
+2. On iPhone, open **`{gateway}/receive`** in Safari and leave the tab in the foreground until status shows **Ready to Receive**.
+3. On Android, use **Send Photos to iPhone** and pick images from your gallery.
+4. On iPhone, tap **Save Image** or long-press the photo → Share → Save to Photos.
+
+### Deploy / update on Render
+
+No new environment variables or services are required.
+
+1. Push commits to the GitHub repo linked to your Render **Web Service** (not a Static Site).
+2. Wait for auto-deploy, or use **Manual Deploy → Deploy latest commit**.
+3. Confirm logs show `[Gateway] Server active on port ...`.
+4. Verify `https://your-app.onrender.com/receive` loads and `/api/status` returns `receiverConnected` / `phoneConnected`.
+
+**Settings:** Root directory empty, build `npm install`, start `npm start`.
 
 ## Repository layout
 
@@ -59,10 +86,24 @@ The server listens on port `8080` by default (override with the `PORT` environme
 
 Uploaded files are stored under `/tmp/airreceive_uploads` and expire after about five minutes if not downloaded.
 
-## Typical workflow
+## Typical workflows
+
+**Receive on Android**
 
 1. Install and open **AirReceive** on your Android phone.
-2. **Same Wi‑Fi:** Share the app’s local URL or QR code with the sender and upload from their browser.
-3. **Different networks:** Deploy `server.js`, paste the gateway URL into the app settings, then have the sender use the gateway’s web page to send photos.
+2. **Same Wi‑Fi:** Share the app’s local URL or QR code; sender uploads from their browser.
+3. **Different networks:** Deploy `server.js`, paste the gateway URL into app settings, sender uses `https://your-gateway/` in a browser.
 
-Received photos appear in the in-app gallery and can be saved to the device’s media library.
+**Send to iPhone**
+
+1. Gateway deployed; Android app has gateway URL saved.
+2. iPhone opens `{gateway}/receive` in Safari (foreground).
+3. Android uses **Send Photos to iPhone** in the app.
+
+Received photos appear in the Android in-app gallery and can be saved to the device photo library. Photos sent to iPhone are saved manually from Safari.
+
+## Limitations
+
+- iPhone `/receive` requires Safari to stay open; background tabs may drop the WebSocket.
+- No pairing or encryption; anyone with the gateway URL can connect (same as before).
+- HEIC images from Android may not preview correctly in all Safari versions; JPEG is most reliable.

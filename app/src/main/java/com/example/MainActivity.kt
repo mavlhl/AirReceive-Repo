@@ -3,6 +3,7 @@ package com.example
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.os.Build
@@ -12,8 +13,11 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
@@ -91,6 +95,15 @@ class MainActivity : ComponentActivity() {
                     is ViewModelEvent.TransferSuccess -> {
                         playAirDropChime()
                         triggerSuccessVibration()
+                    }
+                    is ViewModelEvent.SendSuccess -> {
+                        playAirDropChime()
+                        triggerSuccessVibration()
+                        Toast.makeText(
+                            this@MainActivity,
+                            "Photo sent to iPhone. Save it from Safari on the receive page.",
+                            Toast.LENGTH_LONG
+                        ).show()
                     }
                     is ViewModelEvent.Error -> {
                         Toast.makeText(this@MainActivity, event.message, Toast.LENGTH_LONG).show()
@@ -210,8 +223,19 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
                 )
 
                 // Sharing Instructions & QR-Code Panel
-                if (serverState.isRunning && serverState.serverUrl.isNotEmpty()) {
+                if (serverState.isRunning && serverState.serverUrl.isNotEmpty() && serverState.customUrl.isEmpty()) {
                     SharePortalPanel(url = serverState.serverUrl)
+                }
+
+                // Send to iPhone via public gateway
+                if (serverState.customUrl.isNotEmpty()) {
+                    val receiveUrl = remember(serverState.customUrl) {
+                        serverState.customUrl.removeSuffix("/") + "/receive"
+                    }
+                    SendToIphonePanel(
+                        receiveUrl = receiveUrl,
+                        onSendPhotos = { viewModel.sendPhotosToGateway(it) }
+                    )
                 }
 
                 // Active Download Progress Tracker
@@ -692,6 +716,131 @@ fun SharePortalPanel(url: String) {
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+            }
+        }
+    }
+}
+
+@Composable
+fun SendToIphonePanel(
+    receiveUrl: String,
+    onSendPhotos: (List<Uri>) -> Unit
+) {
+    val context = LocalContext.current
+    val pickImagesLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            onSendPhotos(uris)
+        }
+    }
+
+    val qrCodeBitmap = remember(receiveUrl) {
+        QrCodeGenerator.generate(receiveUrl, 350)
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.35f))
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "SEND TO IPHONE (GATEWAY)",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.2.sp,
+                color = Color(0xFF38BDF8),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(
+                text = "1. On iPhone, open the receive page in Safari and keep it in the foreground.\n2. Tap Send below and choose photos.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(110.dp)
+                        .clip(RoundedCornerShape(16.dp))
+                        .background(Color.White)
+                        .padding(8.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (qrCodeBitmap != null) {
+                        Image(
+                            bitmap = qrCodeBitmap.asImageBitmap(),
+                            contentDescription = "Scan to open iPhone receive page",
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.width(16.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = receiveUrl,
+                        fontSize = 11.sp,
+                        fontFamily = FontFamily.Monospace,
+                        color = Color(0xFF38BDF8),
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(
+                onClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    clipboard.setPrimaryClip(
+                        android.content.ClipData.newPlainText("AirReceive iPhone Receive Link", receiveUrl)
+                    )
+                    Toast.makeText(context, "Receive page URL copied!", Toast.LENGTH_SHORT).show()
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = CircleShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = Color(0xFF38BDF8)
+                )
+            ) {
+                Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Copy iPhone Receive Link", fontWeight = FontWeight.SemiBold)
+            }
+
+            Spacer(modifier = Modifier.height(10.dp))
+
+            Button(
+                onClick = {
+                    pickImagesLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("btn_send_to_iphone"),
+                shape = CircleShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF38BDF8),
+                    contentColor = Color(0xFF0D1117)
+                )
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Send Photos to iPhone", fontWeight = FontWeight.Bold, fontSize = 15.sp)
             }
         }
     }

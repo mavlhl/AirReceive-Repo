@@ -2,6 +2,7 @@ package com.example.ui.viewmodel
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
@@ -15,6 +16,7 @@ import com.example.data.PhotoRepository
 import com.example.data.ReceivedPhoto
 import com.example.server.AirReceiveServer
 import com.example.server.AirReceiveGatewayClient
+import com.example.server.AirReceiveGatewaySender
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -46,6 +48,7 @@ data class ServerState(
 
 sealed interface ViewModelEvent {
     object TransferSuccess : ViewModelEvent
+    object SendSuccess : ViewModelEvent
     class Error(val message: String) : ViewModelEvent
 }
 
@@ -302,6 +305,98 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         airReceiveGatewayClient = null
         releaseLocks()
         _serverState.update { it.copy(isRunning = false, activeTransfer = null) }
+    }
+
+    fun receivePageUrl(): String {
+        val customUrl = _serverState.value.customUrl
+        if (customUrl.isEmpty()) return ""
+        return AirReceiveGatewaySender(getApplication(), customUrl).buildReceivePageUrl()
+    }
+
+    fun sendPhotosToGateway(uris: List<Uri>) {
+        val customUrl = _serverState.value.customUrl
+        if (customUrl.isEmpty()) {
+            viewModelScope.launch {
+                _eventFlow.emit(ViewModelEvent.Error("Set a public gateway URL in settings first."))
+            }
+            return
+        }
+        if (uris.isEmpty()) return
+
+        viewModelScope.launch(Dispatchers.IO) {
+            acquireLocks()
+            val sender = AirReceiveGatewaySender(getApplication(), customUrl)
+
+            for (uri in uris) {
+                var failed = false
+                sender.upload(
+                    uri = uri,
+                    onTransferStarted = { name, size ->
+                        _serverState.update {
+                            it.copy(
+                                activeTransfer = ActiveTransfer(
+                                    fileName = name,
+                                    progress = 0f,
+                                    bytesRead = 0,
+                                    totalBytes = size,
+                                    status = TransferStatus.IN_PROGRESS
+                                )
+                            )
+                        }
+                    },
+                    onTransferProgress = { read, total ->
+                        _serverState.update {
+                            val current = it.activeTransfer ?: return@update it
+                            val percentage = if (total > 0) read.toFloat() / total.toFloat() else 0f
+                            it.copy(
+                                activeTransfer = current.copy(
+                                    progress = percentage,
+                                    bytesRead = read,
+                                    totalBytes = total
+                                )
+                            )
+                        }
+                    },
+                    onTransferCompleted = { name ->
+                        _serverState.update {
+                            val current = it.activeTransfer
+                            if (current != null) {
+                                it.copy(activeTransfer = current.copy(progress = 1f, status = TransferStatus.COMPLETED))
+                            } else it
+                        }
+                        viewModelScope.launch {
+                            _eventFlow.emit(ViewModelEvent.SendSuccess)
+                            kotlinx.coroutines.delay(2500)
+                            _serverState.update {
+                                if (it.activeTransfer?.fileName == name) {
+                                    it.copy(activeTransfer = null)
+                                } else it
+                            }
+                        }
+                    },
+                    onTransferFailed = { error ->
+                        failed = true
+                        _serverState.update {
+                            val current = it.activeTransfer
+                            if (current != null) {
+                                it.copy(activeTransfer = current.copy(status = TransferStatus.FAILED))
+                            } else it
+                        }
+                        viewModelScope.launch {
+                            _eventFlow.emit(ViewModelEvent.Error("Send failed: $error"))
+                            kotlinx.coroutines.delay(4000)
+                            _serverState.update {
+                                if (it.activeTransfer?.status == TransferStatus.FAILED) {
+                                    it.copy(activeTransfer = null)
+                                } else it
+                            }
+                        }
+                    }
+                )
+                if (failed) break
+            }
+            releaseLocks()
+        }
     }
 
     fun deletePhoto(photo: ReceivedPhoto) {

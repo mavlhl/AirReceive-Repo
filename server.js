@@ -8,7 +8,6 @@ const fs = require('fs');
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ noServer: true });
 
 const PORT = process.env.PORT || 8080;
 const UPLOAD_DIR = path.join('/tmp', 'airreceive_uploads');
@@ -21,8 +20,17 @@ if (!fs.existsSync(UPLOAD_DIR)) {
 // Memory map of active file transfers: fileId -> { name, path, size, mimeType, timestamp }
 const fileMap = new Map();
 
-// Track connected AirReceive phones
+// Track connected AirReceive phones and Safari receiver tabs
 const activePhones = new Set();
+const activeReceivers = new Set();
+
+function broadcastToSockets(sockets, notification) {
+  for (const socket of sockets) {
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(notification);
+    }
+  }
+}
 
 // Multer storage setup
 const storage = multer.diskStorage({
@@ -55,11 +63,13 @@ setInterval(() => {
   }
 }, 60 * 1000);
 
-// Status route for webpage to see if any phone is online
+// Status route for webpages to see connected clients
 app.get('/api/status', (req, res) => {
   res.json({
     phoneConnected: activePhones.size > 0,
-    connectionsCount: activePhones.size
+    receiverConnected: activeReceivers.size > 0,
+    connectionsCount: activePhones.size,
+    receiverCount: activeReceivers.size
   });
 });
 
@@ -81,34 +91,45 @@ app.post('/upload', upload.single('file'), (req, res) => {
   };
 
   fileMap.set(fileId, fileInfo);
-  console.log(`[Upload] File received: ${fileInfo.name} (${fileInfo.size} bytes). ID: ${fileId}`);
+  const target = (req.body.target === 'receiver') ? 'receiver' : 'phone';
+  console.log(`[Upload] File received: ${fileInfo.name} (${fileInfo.size} bytes). ID: ${fileId}, target: ${target}`);
 
-  // Notify all connected phones via WebSocket
-  if (activePhones.size === 0) {
-    console.warn(`[Broadcast] No phones connected to relay the file.`);
+  const notification = JSON.stringify({
+    type: 'NOTIFY_UPLOAD',
+    id: fileId,
+    name: fileInfo.name,
+    size: fileInfo.size,
+    mimeType: fileInfo.mimeType
+  });
+
+  let phoneRelayed = false;
+  let receiverRelayed = false;
+
+  if (target === 'receiver') {
+    if (activeReceivers.size === 0) {
+      console.warn(`[Broadcast] No receiver browsers connected to relay the file.`);
+    } else {
+      broadcastToSockets(activeReceivers, notification);
+      receiverRelayed = true;
+      console.log(`[Broadcast] Notified ${activeReceivers.size} receiver socket(s).`);
+    }
   } else {
-    const notification = JSON.stringify({
-      type: 'NOTIFY_UPLOAD',
-      id: fileId,
-      name: fileInfo.name,
-      size: fileInfo.size,
-      mimeType: fileInfo.mimeType
-    });
-
-    for (const phoneSocket of activePhones) {
-      if (phoneSocket.readyState === WebSocket.OPEN) {
-        phoneSocket.send(notification);
-        console.log(`[Broadcast] Notified phone socket of new download.`);
-      }
+    if (activePhones.size === 0) {
+      console.warn(`[Broadcast] No phones connected to relay the file.`);
+    } else {
+      broadcastToSockets(activePhones, notification);
+      phoneRelayed = true;
+      console.log(`[Broadcast] Notified ${activePhones.size} phone socket(s).`);
     }
   }
 
-  const phoneRelayed = activePhones.size > 0;
   res.json({
     success: true,
     fileId: fileId,
     name: fileInfo.name,
-    phoneRelayed: phoneRelayed
+    target: target,
+    phoneRelayed: phoneRelayed,
+    receiverRelayed: receiverRelayed
   });
 });
 
@@ -126,7 +147,7 @@ app.get('/download/:id', (req, res) => {
     return res.status(404).send('File physical payload not found.');
   }
 
-  console.log(`[Download] Phone is downloading file ${info.name}...`);
+  console.log(`[Download] Client is downloading file ${info.name}...`);
   res.download(info.path, info.name, (err) => {
     if (err) {
       console.error(`[Download Error] Failed streaming file ${info.name}:`, err);
@@ -424,6 +445,23 @@ app.get('/', (req, res) => {
       from { transform: translateY(10px); opacity: 0; }
       to { transform: translateY(0); opacity: 1; }
     }
+
+    .nav-link {
+      display: inline-block;
+      margin-bottom: 20px;
+      padding: 10px 18px;
+      border-radius: 100px;
+      border: 1px solid var(--border-color);
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .nav-link:hover {
+      border-color: var(--accent);
+      background-color: rgba(56, 189, 248, 0.08);
+    }
   </style>
 </head>
 <body>
@@ -438,7 +476,9 @@ app.get('/', (req, res) => {
       </div>
 
       <h1>AirReceive Gateway</h1>
-      <p class="tagline">Send photos & images securely from any device, anywhere in the world</p>
+      <p class="tagline">Send photos to your Android device from any browser</p>
+
+      <a class="nav-link" href="/receive">Receive on iPhone / Safari &rarr;</a>
 
       <div class="status-badge" id="statusBadge">
         <span class="dot"></span>
@@ -564,6 +604,7 @@ app.get('/', (req, res) => {
 
       const formData = new FormData();
       formData.append('file', file);
+      formData.append('target', 'phone');
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/upload', true);
@@ -652,33 +693,275 @@ app.get('/', (req, res) => {
   `);
 });
 
-// Handle upgrade for WebSocket server on /ws/phone
+const wssPhone = new WebSocket.Server({ noServer: true });
+const wssReceiver = new WebSocket.Server({ noServer: true });
+
+function trackSocket(ws, set, label) {
+  set.add(ws);
+  console.log(`[WebSocket] ${label} connected (${set.size} total).`);
+
+  ws.on('close', () => {
+    set.delete(ws);
+    console.log(`[WebSocket] ${label} disconnected (${set.size} remaining).`);
+  });
+
+  ws.on('error', (err) => {
+    console.error(`[WebSocket] ${label} error:`, err);
+    set.delete(ws);
+  });
+}
+
+// iPhone / Safari receive page
+app.get('/receive', (req, res) => {
+  res.send(`
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AirReceive — Receive on iPhone</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-color: #0d1117;
+      --card-bg: #161b22;
+      --border-color: #30363d;
+      --primary: #38bdf8;
+      --text-main: #f0f6fc;
+      --text-muted: #8b949e;
+    }
+    body {
+      margin: 0;
+      background: var(--bg-color);
+      color: var(--text-main);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container { width: 90%; max-width: 520px; margin: 24px auto; }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 20px;
+      padding: 32px;
+      text-align: center;
+    }
+    h1 { font-size: 24px; margin: 0 0 8px; }
+    .tagline { color: var(--text-muted); font-size: 14px; margin-bottom: 20px; }
+    .nav-link {
+      display: inline-block;
+      margin-bottom: 20px;
+      padding: 10px 18px;
+      border-radius: 100px;
+      border: 1px solid var(--border-color);
+      color: var(--primary);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 600;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 14px;
+      border-radius: 100px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      margin-bottom: 20px;
+      background: rgba(239, 68, 68, 0.1);
+      border: 1px solid rgba(239, 68, 68, 0.2);
+      color: #fc8181;
+    }
+    .status-badge.connected {
+      background: rgba(56, 189, 248, 0.1);
+      border-color: rgba(56, 189, 248, 0.25);
+      color: var(--primary);
+    }
+    .status-badge .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #ef4444; margin-right: 8px;
+    }
+    .status-badge.connected .dot { background: var(--primary); }
+    .preview-wrap {
+      display: none;
+      margin-top: 20px;
+      padding: 16px;
+      border-radius: 16px;
+      background: rgba(22, 27, 34, 0.8);
+      border: 1px solid var(--border-color);
+    }
+    .preview-wrap.visible { display: block; }
+    .preview-wrap img {
+      max-width: 100%;
+      max-height: 280px;
+      border-radius: 12px;
+      object-fit: contain;
+    }
+    .save-btn {
+      display: inline-block;
+      margin-top: 16px;
+      padding: 12px 24px;
+      border-radius: 100px;
+      background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+      color: #0d1117;
+      font-weight: 700;
+      text-decoration: none;
+      font-size: 14px;
+    }
+    .instructions {
+      text-align: left;
+      margin-top: 24px;
+      padding: 16px 20px;
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+    .instructions strong { color: var(--text-main); }
+    .toast-error {
+      display: none;
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 12px;
+      background: rgba(239, 68, 68, 0.12);
+      color: #fecaca;
+      font-size: 13px;
+    }
+    .waiting {
+      color: var(--text-muted);
+      font-size: 14px;
+      margin-top: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="card">
+      <a class="nav-link" href="/">&larr; Send to Android</a>
+      <h1>Receive on iPhone</h1>
+      <p class="tagline">Keep this page open in Safari while sending from your Android device</p>
+
+      <div class="status-badge" id="statusBadge">
+        <span class="dot"></span>
+        <span id="statusText">Connecting...</span>
+      </div>
+
+      <p class="waiting" id="waitingText">Waiting for photos from Android...</p>
+
+      <div class="preview-wrap" id="previewWrap">
+        <img id="receivedImage" alt="Received photo" />
+        <br />
+        <a class="save-btn" id="saveLink" download="photo.jpg">Save Image</a>
+      </div>
+
+      <div class="toast-error" id="errorToast"></div>
+
+      <div class="instructions">
+        <strong>How to use</strong>
+        <ol>
+          <li>Leave this Safari tab open (do not switch apps).</li>
+          <li>On Android AirReceive, set gateway URL to <code id="originCode"></code></li>
+          <li>Tap <strong>Send to iPhone</strong> and pick photos.</li>
+          <li>When a photo appears, tap <strong>Save Image</strong> or long-press the image → Share → Save to Photos.</li>
+        </ol>
+      </div>
+    </div>
+  </div>
+  <script>
+    const statusBadge = document.getElementById('statusBadge');
+    const statusText = document.getElementById('statusText');
+    const previewWrap = document.getElementById('previewWrap');
+    const receivedImage = document.getElementById('receivedImage');
+    const saveLink = document.getElementById('saveLink');
+    const errorToast = document.getElementById('errorToast');
+    const waitingText = document.getElementById('waitingText');
+    document.getElementById('originCode').textContent = window.location.origin;
+
+    let ws = null;
+    let reconnectTimer = null;
+
+    function wsUrl() {
+      const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return proto + '//' + window.location.host + '/ws/receiver';
+    }
+
+    function setConnected(connected) {
+      if (connected) {
+        statusBadge.classList.add('connected');
+        statusText.textContent = 'Ready to Receive';
+      } else {
+        statusBadge.classList.remove('connected');
+        statusText.textContent = 'Disconnected — Reconnecting...';
+      }
+    }
+
+    function showError(msg) {
+      errorToast.textContent = msg;
+      errorToast.style.display = 'block';
+      setTimeout(() => { errorToast.style.display = 'none'; }, 6000);
+    }
+
+    function connect() {
+      if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+
+      ws = new WebSocket(wsUrl());
+
+      ws.onopen = () => setConnected(true);
+
+      ws.onclose = () => {
+        setConnected(false);
+        reconnectTimer = setTimeout(connect, 5000);
+      };
+
+      ws.onerror = () => setConnected(false);
+
+      ws.onmessage = async (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type !== 'NOTIFY_UPLOAD') return;
+
+          waitingText.style.display = 'none';
+          const res = await fetch('/download/' + msg.id);
+          if (!res.ok) {
+            showError('Download failed. The file may have expired.');
+            return;
+          }
+          const blob = await res.blob();
+          const url = URL.createObjectURL(blob);
+          receivedImage.src = url;
+          saveLink.href = url;
+          saveLink.download = msg.name || 'photo.jpg';
+          previewWrap.classList.add('visible');
+        } catch (e) {
+          showError('Failed to receive photo: ' + e.message);
+        }
+      };
+    }
+
+    connect();
+  </script>
+</body>
+</html>
+  `);
+});
+
+// Handle WebSocket upgrades
 server.on('upgrade', (request, socket, head) => {
   const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
 
   if (pathname === '/ws/phone') {
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit('connection', ws, request);
+    wssPhone.handleUpgrade(request, socket, head, (ws) => {
+      trackSocket(ws, activePhones, 'Phone app');
+    });
+  } else if (pathname === '/ws/receiver') {
+    wssReceiver.handleUpgrade(request, socket, head, (ws) => {
+      trackSocket(ws, activeReceivers, 'Receiver browser');
     });
   } else {
     socket.destroy();
   }
-});
-
-// Socket controller
-wss.on('connection', (ws) => {
-  console.log('[WebSocket] Phone application client connected.');
-  activePhones.add(ws);
-
-  ws.on('close', () => {
-    console.log('[WebSocket] Phone client disconnected.');
-    activePhones.delete(ws);
-  });
-
-  ws.on('error', (err) => {
-    console.error('[WebSocket] Socket connection error:', err);
-    activePhones.delete(ws);
-  });
 });
 
 // Start the server
