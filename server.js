@@ -103,10 +103,12 @@ app.post('/upload', upload.single('file'), (req, res) => {
     }
   }
 
+  const phoneRelayed = activePhones.size > 0;
   res.json({
     success: true,
     fileId: fileId,
-    name: fileInfo.name
+    name: fileInfo.name,
+    phoneRelayed: phoneRelayed
   });
 });
 
@@ -579,6 +581,13 @@ app.get('/', (req, res) => {
         progressContainer.style.display = 'none';
         
         if (xhr.status === 200) {
+          try {
+            const result = JSON.parse(xhr.responseText);
+            if (result.phoneRelayed === false) {
+              showError('Upload reached the server, but no Android phone is connected. Open AirReceive, save your gateway URL, and keep the app in the foreground until status shows Ready.');
+              return;
+            }
+          } catch (e) { /* legacy response */ }
           showSuccess();
         } else {
           showError('Server rejected file upload: ' + xhr.responseText);

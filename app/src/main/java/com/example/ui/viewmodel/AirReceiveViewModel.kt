@@ -119,8 +119,18 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         } else {
             trimmed
         }
+        val previous = prefs.getString("custom_url", "") ?: ""
         prefs.edit().putString("custom_url", formatted).apply()
         refreshNetworkInfo()
+        // Reconnect WebSocket when the gateway URL changes (saving settings does not do this on its own).
+        if (formatted != previous) {
+            restartServer()
+        }
+    }
+
+    fun restartServer() {
+        stopServer()
+        startServer()
     }
 
     fun startServer() {
