@@ -106,7 +106,7 @@ class MainActivity : ComponentActivity() {
                             val n = event.photoCount
                             showToast(
                                 "Sent $n photo${if (n == 1) "" else "s"} to iPhone. " +
-                                    "Tap Download all on the receive page."
+                                    "Tap Save all to Photos on the receive page (Safari)."
                             )
                         }
                         is ViewModelEvent.Error -> {

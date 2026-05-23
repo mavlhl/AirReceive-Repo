@@ -2,7 +2,6 @@ const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
 const multer = require('multer');
-const archiver = require('archiver');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
@@ -249,57 +248,20 @@ app.post('/upload/batch', upload.array('files', MAX_BATCH_FILES), (req, res) => 
   });
 });
 
-// Batch ZIP download (iPhone) — must be registered before /download/:id
-app.get('/download/batch/:batchId', (req, res) => {
-  let batchId = req.params.batchId;
-  if (batchId.endsWith('.zip')) {
-    batchId = batchId.slice(0, -4);
+// Delete batch after iPhone saves to Photos (Share sheet flow)
+app.delete('/batch/:batchId', (req, res) => {
+  const batchId = req.params.batchId;
+  if (!batchMap.has(batchId)) {
+    return res.status(404).json({ error: 'Batch expired or not found.' });
   }
-
-  const batch = batchMap.get(batchId);
-  if (!batch) {
-    return res.status(404).send('Batch expired or not found.');
-  }
-
-  const entries = batch.fileIds
-    .map((id) => fileMap.get(id))
-    .filter((info) => info && fs.existsSync(info.path));
-
-  if (entries.length === 0) {
-    deleteBatch(batchId);
-    return res.status(404).send('Batch files not found on disk.');
-  }
-
-  console.log(`[Download] Streaming ZIP for batch ${batchId} (${entries.length} files)...`);
-  res.setHeader('Content-Type', 'application/zip');
-  res.setHeader('Content-Disposition', `attachment; filename="airreceive-${batchId.slice(0, 8)}.zip"`);
-
-  const archive = archiver('zip', { zlib: { level: 5 } });
-  archive.on('error', (err) => {
-    console.error('[Download Error] ZIP archive failed:', err);
-    if (!res.headersSent) {
-      res.status(500).end();
-    }
-  });
-
-  archive.pipe(res);
-  for (const info of entries) {
-    archive.file(info.path, { name: info.name });
-  }
-
-  archive.finalize();
-  archive.on('end', () => {
-    console.log(`[Download Success] Batch ZIP ${batchId} delivered. Cleaning up.`);
-    deleteBatch(batchId);
-  });
+  console.log(`[Batch] Client acknowledged save; deleting batch ${batchId}`);
+  deleteBatch(batchId);
+  res.json({ success: true });
 });
 
-// Download route — ?keep=1 skips delete (used for iPhone batch thumbnails)
+// Download route — ?keep=1 skips delete (used for iPhone batch thumbnails + share)
 app.get('/download/:id', (req, res) => {
   const fileId = req.params.id;
-  if (fileId === 'batch') {
-    return res.status(404).send('Use /download/batch/:batchId for ZIP downloads.');
-  }
 
   const info = fileMap.get(fileId);
 
@@ -973,24 +935,49 @@ app.get('/receive', (req, res) => {
       border-radius: 8px;
       background: #0d1117;
     }
-    .download-all-btn {
+    .save-all-btn {
       display: block;
       width: 100%;
       padding: 14px 20px;
       border-radius: 100px;
+      border: none;
       background: linear-gradient(135deg, #38bdf8, #0ea5e9);
       color: #0d1117;
       font-weight: 700;
-      text-decoration: none;
       font-size: 15px;
       text-align: center;
       box-sizing: border-box;
+      cursor: pointer;
     }
-    .zip-hint {
+    .save-all-btn:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    .save-hint {
       font-size: 11px;
       color: var(--text-muted);
       margin-top: 10px;
       line-height: 1.4;
+    }
+    .toast-success {
+      display: none;
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 12px;
+      background: rgba(16, 185, 129, 0.12);
+      color: #a7f3d0;
+      font-size: 13px;
+    }
+    .thumb-item {
+      cursor: pointer;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .thumb-item img {
+      display: block;
+      width: 100%;
+      aspect-ratio: 1;
+      object-fit: cover;
     }
     .instructions {
       text-align: left;
@@ -1035,19 +1022,21 @@ app.get('/receive', (req, res) => {
       <div class="batch-wrap" id="batchWrap">
         <div class="batch-title" id="batchTitle">Received photos</div>
         <div class="thumb-grid" id="thumbGrid"></div>
-        <a class="download-all-btn" id="downloadAllBtn" href="#">Download all photos (ZIP)</a>
-        <p class="zip-hint">After download, open the ZIP in Files, then select images and Save to Photos.</p>
+        <button type="button" class="save-all-btn" id="saveAllBtn" disabled>Save all to Photos</button>
+        <p class="save-hint">Tap the button, then on the Share sheet choose <strong>Save Images</strong> or <strong>Add to Photos</strong>. Use Safari for best results.</p>
+        <p class="save-hint" id="fallbackHint" style="display:none;">Or tap any thumbnail below to save that photo individually.</p>
       </div>
 
+      <div class="toast-success" id="successToast"></div>
       <div class="toast-error" id="errorToast"></div>
 
       <div class="instructions">
         <strong>How to use</strong>
         <ol>
-          <li>Leave this Safari tab open (do not switch apps).</li>
+          <li>Leave this Safari tab open in <strong>Safari</strong> (do not switch apps).</li>
           <li>On Android AirReceive, set gateway URL to <code id="originCode"></code></li>
           <li>Tap <strong>Send Photos to iPhone</strong> and select multiple images.</li>
-          <li>Tap <strong>Download all photos (ZIP)</strong>, then extract in the Files app.</li>
+          <li>Tap <strong>Save all to Photos</strong>, then confirm on the iOS Share sheet.</li>
         </ol>
       </div>
     </div>
@@ -1058,14 +1047,17 @@ app.get('/receive', (req, res) => {
     const batchWrap = document.getElementById('batchWrap');
     const batchTitle = document.getElementById('batchTitle');
     const thumbGrid = document.getElementById('thumbGrid');
-    const downloadAllBtn = document.getElementById('downloadAllBtn');
+    const saveAllBtn = document.getElementById('saveAllBtn');
+    const successToast = document.getElementById('successToast');
     const errorToast = document.getElementById('errorToast');
     const waitingText = document.getElementById('waitingText');
+    const fallbackHint = document.getElementById('fallbackHint');
     document.getElementById('originCode').textContent = window.location.origin;
 
     let ws = null;
     let reconnectTimer = null;
     let currentBatchId = null;
+    let cachedBatchFiles = [];
 
     function wsUrl() {
       const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -1083,10 +1075,90 @@ app.get('/receive', (req, res) => {
     }
 
     function showError(msg) {
+      successToast.style.display = 'none';
       errorToast.textContent = msg;
       errorToast.style.display = 'block';
       setTimeout(() => { errorToast.style.display = 'none'; }, 6000);
     }
+
+    function showSuccess(msg) {
+      errorToast.style.display = 'none';
+      successToast.textContent = msg;
+      successToast.style.display = 'block';
+    }
+
+    function mimeFromName(name) {
+      const lower = (name || '').toLowerCase();
+      if (lower.endsWith('.png')) return 'image/png';
+      if (lower.endsWith('.webp')) return 'image/webp';
+      if (lower.endsWith('.gif')) return 'image/gif';
+      if (lower.endsWith('.heic') || lower.endsWith('.heif')) return 'image/heic';
+      return 'image/jpeg';
+    }
+
+    async function cleanupBatch() {
+      if (!currentBatchId) return;
+      try {
+        await fetch('/batch/' + currentBatchId, { method: 'DELETE' });
+      } catch (e) {
+        console.warn('Batch cleanup failed', e);
+      }
+      currentBatchId = null;
+      cachedBatchFiles = [];
+    }
+
+    async function shareOneFile(entry) {
+      const file = new File([entry.blob], entry.name, { type: entry.blob.type || mimeFromName(entry.name) });
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        await navigator.share({ files: [file] });
+        return true;
+      }
+      return false;
+    }
+
+    async function saveAllToPhotos() {
+      if (cachedBatchFiles.length === 0) {
+        showError('No photos loaded yet.');
+        return;
+      }
+      saveAllBtn.disabled = true;
+      try {
+        const shareFiles = cachedBatchFiles.map((entry) =>
+          new File([entry.blob], entry.name, { type: entry.blob.type || mimeFromName(entry.name) })
+        );
+        if (navigator.canShare && navigator.canShare({ files: shareFiles })) {
+          await navigator.share({ files: shareFiles });
+          await cleanupBatch();
+          showSuccess('Done — photos sent to the Share sheet. If you chose Save Images, check your Photos app.');
+          saveAllBtn.textContent = 'Saved';
+          return;
+        }
+        // Fallback: share one at a time
+        fallbackHint.style.display = 'block';
+        let saved = 0;
+        for (const entry of cachedBatchFiles) {
+          const ok = await shareOneFile(entry);
+          if (ok) saved++;
+        }
+        if (saved > 0) {
+          await cleanupBatch();
+          showSuccess('Shared ' + saved + ' photo(s). Use Save Images on each sheet if prompted.');
+          saveAllBtn.textContent = 'Saved';
+        } else {
+          showError('Could not open Share sheet. Use Safari on iPhone, or tap a thumbnail to save one photo at a time.');
+          saveAllBtn.disabled = false;
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') {
+          showError('Share cancelled.');
+        } else {
+          showError('Save failed: ' + (e.message || 'Unknown error'));
+        }
+        saveAllBtn.disabled = false;
+      }
+    }
+
+    saveAllBtn.addEventListener('click', saveAllToPhotos);
 
     function connect() {
       if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
@@ -1104,29 +1176,49 @@ app.get('/receive', (req, res) => {
 
       async function loadBatchThumbnails(files) {
         thumbGrid.innerHTML = '';
+        cachedBatchFiles = [];
         for (const file of files) {
           try {
             const res = await fetch('/download/' + file.id + '?keep=1');
             if (!res.ok) continue;
             const blob = await res.blob();
-            const url = URL.createObjectURL(blob);
+            const name = file.name || 'photo.jpg';
+            const type = file.mimeType || blob.type || mimeFromName(name);
+            const entry = { name, blob, type };
+            cachedBatchFiles.push(entry);
+
+            const wrap = document.createElement('div');
+            wrap.className = 'thumb-item';
+            wrap.title = 'Tap to save this photo';
             const img = document.createElement('img');
-            img.src = url;
-            img.alt = file.name || 'Photo';
-            thumbGrid.appendChild(img);
+            img.src = URL.createObjectURL(blob);
+            img.alt = name;
+            wrap.appendChild(img);
+            wrap.addEventListener('click', async () => {
+              try {
+                const ok = await shareOneFile({ name, blob, type });
+                if (ok) showSuccess('Use Save Images on the Share sheet for ' + name);
+                else showError('Share not supported. Try Safari.');
+              } catch (e) {
+                if (e.name !== 'AbortError') showError(e.message || 'Share failed');
+              }
+            });
+            thumbGrid.appendChild(wrap);
           } catch (e) {
             console.warn('Thumbnail failed for', file.id, e);
           }
         }
+        saveAllBtn.disabled = cachedBatchFiles.length === 0;
       }
 
       async function handleBatch(msg) {
         waitingText.style.display = 'none';
+        successToast.style.display = 'none';
         currentBatchId = msg.batchId;
         const count = msg.count || (msg.files && msg.files.length) || 0;
         batchTitle.textContent = count + ' photo' + (count === 1 ? '' : 's') + ' ready';
-        downloadAllBtn.href = '/download/batch/' + msg.batchId + '.zip';
-        downloadAllBtn.textContent = 'Download all ' + count + ' photos (ZIP)';
+        saveAllBtn.textContent = 'Save all ' + count + ' photos to Photos';
+        saveAllBtn.disabled = true;
         batchWrap.classList.add('visible');
         if (msg.files && msg.files.length) {
           await loadBatchThumbnails(msg.files);

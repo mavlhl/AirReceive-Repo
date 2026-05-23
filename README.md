@@ -40,16 +40,16 @@ Uploads use `POST /upload` with form field `target`: `phone` (default, to Androi
 1. On Android, save your gateway URL in app settings (same as receive mode).
 2. On iPhone, open **`{gateway}/receive`** in Safari and leave the tab in the foreground until status shows **Ready to Receive**.
 3. On Android, tap **Send Photos to iPhone (batch)** and select **up to 20 photos** at once.
-4. On iPhone, when the grid appears, tap **Download all photos (ZIP)**.
-5. Open the ZIP in the **Files** app, then select images and **Save to Photos**.
+4. On iPhone, when the grid appears, tap **Save all to Photos**.
+5. On the iOS Share sheet, choose **Save Images** or **Add to Photos**.
 
-Android uploads via `POST /upload/batch` (`target=receiver`). The gateway sends one `NOTIFY_BATCH` WebSocket message; iPhone downloads a single ZIP from `GET /download/batch/:batchId`.
+Android uploads via `POST /upload/batch` (`target=receiver`). The gateway sends one `NOTIFY_BATCH` WebSocket message; iPhone saves via the Web Share API, then the server cleans up with `DELETE /batch/:batchId`.
 
-**Limits:** 20 images per batch, 100 MB total per batch.
+**Limits:** 20 images per batch, 100 MB total per batch. Use **Safari** on `/receive` (Chrome on iOS has weaker Share support).
 
 ### Deploy / update on Render
 
-No new environment variables or services are required. Batch ZIP support adds the `archiver` npm package — Render runs `npm install` on deploy automatically.
+No new environment variables or services are required.
 
 1. Push commits to the GitHub repo linked to your Render **Web Service** (not a Static Site).
 2. Wait for auto-deploy, or use **Manual Deploy → Deploy latest commit**.
@@ -102,7 +102,7 @@ Uploaded files are stored under `/tmp/airreceive_uploads` and expire after about
 1. Gateway deployed; Android app has gateway URL saved.
 2. iPhone opens `{gateway}/receive` in Safari (foreground).
 3. Android selects multiple photos and sends one batch.
-4. iPhone taps **Download all photos (ZIP)**.
+4. iPhone taps **Save all to Photos** and confirms on the Share sheet.
 
 Received photos appear in the Android in-app gallery and can be saved to the device photo library. Photos sent to iPhone are saved manually from Safari.
 
@@ -111,4 +111,5 @@ Received photos appear in the Android in-app gallery and can be saved to the dev
 - iPhone `/receive` requires Safari to stay open; background tabs may drop the WebSocket.
 - No pairing or encryption; anyone with the gateway URL can connect (same as before).
 - HEIC images from Android may not preview correctly in all Safari versions; JPEG is most reliable.
-- iPhone cannot save an entire batch to Photos in one system tap; use the ZIP download, then extract in Files.
+- Saving to Photos requires one Share sheet confirmation per batch (Safari security); it is not fully automatic.
+- If batch share fails, tap individual thumbnails on `/receive` to save one photo at a time.
