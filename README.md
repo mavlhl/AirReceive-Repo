@@ -11,7 +11,7 @@ This repo contains two parts that work together:
 
 ## Thank you for supporting Maverick!
 You can donate a buck to support Maverick in continue updating this repo! https://buymeacoffee.com/mavlhl
-![Buy Me a Coffee QR code](docs/bmc-qr.png)
+<img src="docs/bmc-qr.png" alt="Buy Me a Coffee QR code" width="250" height="250" />
 
 ## How it works
 
