@@ -20,6 +20,7 @@ import com.example.server.AirReceiveGatewaySender
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.net.Inet4Address
 import java.net.NetworkInterface
@@ -67,7 +68,16 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
     private var airReceiveGatewayClient: AirReceiveGatewayClient? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var lockRefCount = 0
+    private var lastSendProgressMs = 0L
     private val prefs = application.getSharedPreferences("airreceive_prefs", Context.MODE_PRIVATE)
+
+    /** Compose state must be updated on the main thread. */
+    private fun runOnMain(block: () -> Unit) {
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            block()
+        }
+    }
 
     init {
         val database = AppDatabase.getDatabase(application)
@@ -152,51 +162,57 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
 
             // Define reusable transfer callbacks for both local airReceiveServer and remote airReceiveGatewayClient
             val onStart = { name: String, size: Long ->
-                _serverState.update {
-                    it.copy(
-                        activeTransfer = ActiveTransfer(
-                            fileName = name,
-                            progress = 0f,
-                            bytesRead = 0,
-                            totalBytes = size,
-                            status = TransferStatus.IN_PROGRESS
+                runOnMain {
+                    _serverState.update {
+                        it.copy(
+                            activeTransfer = ActiveTransfer(
+                                fileName = name,
+                                progress = 0f,
+                                bytesRead = 0,
+                                totalBytes = size,
+                                status = TransferStatus.IN_PROGRESS
+                            )
                         )
-                    )
+                    }
                 }
             }
 
             val onProgress = { read: Long, total: Long ->
-                _serverState.update {
-                    val current = it.activeTransfer
-                    if (current != null) {
-                        val percentage = if (total > 0) read.toFloat() / total.toFloat() else 0f
-                        it.copy(
-                            activeTransfer = current.copy(
-                                progress = percentage,
-                                bytesRead = read,
-                                totalBytes = total
+                runOnMain {
+                    _serverState.update {
+                        val current = it.activeTransfer
+                        if (current != null) {
+                            val percentage = if (total > 0) read.toFloat() / total.toFloat() else 0f
+                            it.copy(
+                                activeTransfer = current.copy(
+                                    progress = percentage,
+                                    bytesRead = read,
+                                    totalBytes = total
+                                )
                             )
-                        )
-                    } else {
-                        it
+                        } else {
+                            it
+                        }
                     }
                 }
             }
 
             val onCompleted = { name: String, path: String, size: Long, mimeType: String, senderIp: String ->
                 Log.d("AirReceiveViewModel", "Saved file complete: $name. Saving meta to Room DB.")
-                
-                _serverState.update {
-                    val current = it.activeTransfer
-                    if (current != null) {
-                        it.copy(
-                            activeTransfer = current.copy(
-                                progress = 1.0f,
-                                status = TransferStatus.COMPLETED
+
+                runOnMain {
+                    _serverState.update {
+                        val current = it.activeTransfer
+                        if (current != null) {
+                            it.copy(
+                                activeTransfer = current.copy(
+                                    progress = 1.0f,
+                                    status = TransferStatus.COMPLETED
+                                )
                             )
-                        )
-                    } else {
-                        it
+                        } else {
+                            it
+                        }
                     }
                 }
 
@@ -214,11 +230,13 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
                     _eventFlow.emit(ViewModelEvent.TransferSuccess)
                     
                     kotlinx.coroutines.delay(2500)
-                    _serverState.update {
-                        if (it.activeTransfer?.fileName == name && it.activeTransfer?.status == TransferStatus.COMPLETED) {
-                            it.copy(activeTransfer = null)
-                        } else {
-                            it
+                    runOnMain {
+                        _serverState.update {
+                            if (it.activeTransfer?.fileName == name && it.activeTransfer?.status == TransferStatus.COMPLETED) {
+                                it.copy(activeTransfer = null)
+                            } else {
+                                it
+                            }
                         }
                     }
                 }
@@ -226,29 +244,33 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
             }
 
             val onFailed = { error: String ->
-                _serverState.update {
-                    val current = it.activeTransfer
-                    if (current != null) {
-                        it.copy(
-                            activeTransfer = current.copy(
-                                status = TransferStatus.FAILED
+                runOnMain {
+                    _serverState.update {
+                        val current = it.activeTransfer
+                        if (current != null) {
+                            it.copy(
+                                activeTransfer = current.copy(
+                                    status = TransferStatus.FAILED
+                                )
                             )
-                        )
-                    } else {
-                        it
+                        } else {
+                            it
+                        }
                     }
                 }
                 viewModelScope.launch {
                     _eventFlow.emit(ViewModelEvent.Error("Transfer failed: $error"))
                 }
-                
+
                 viewModelScope.launch {
                     kotlinx.coroutines.delay(4000)
-                    _serverState.update {
-                        if (it.activeTransfer?.status == TransferStatus.FAILED) {
-                            it.copy(activeTransfer = null)
-                        } else {
-                            it
+                    runOnMain {
+                        _serverState.update {
+                            if (it.activeTransfer?.status == TransferStatus.FAILED) {
+                                it.copy(activeTransfer = null)
+                            } else {
+                                it
+                            }
                         }
                     }
                 }
@@ -303,6 +325,7 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         airReceiveServer = null
         airReceiveGatewayClient?.stop()
         airReceiveGatewayClient = null
+        lockRefCount = 0
         releaseLocks()
         _serverState.update { it.copy(isRunning = false, activeTransfer = null) }
     }
@@ -323,79 +346,109 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         }
         if (uris.isEmpty()) return
 
-        viewModelScope.launch(Dispatchers.IO) {
+        viewModelScope.launch {
             acquireLocks()
-            val sender = AirReceiveGatewaySender(getApplication(), customUrl)
+            try {
+                val sender = AirReceiveGatewaySender(getApplication(), customUrl)
 
-            for (uri in uris) {
-                var failed = false
-                sender.upload(
-                    uri = uri,
-                    onTransferStarted = { name, size ->
-                        _serverState.update {
-                            it.copy(
-                                activeTransfer = ActiveTransfer(
-                                    fileName = name,
-                                    progress = 0f,
-                                    bytesRead = 0,
-                                    totalBytes = size,
-                                    status = TransferStatus.IN_PROGRESS
-                                )
-                            )
-                        }
-                    },
-                    onTransferProgress = { read, total ->
-                        _serverState.update {
-                            val current = it.activeTransfer ?: return@update it
-                            val percentage = if (total > 0) read.toFloat() / total.toFloat() else 0f
-                            it.copy(
-                                activeTransfer = current.copy(
-                                    progress = percentage,
-                                    bytesRead = read,
-                                    totalBytes = total
-                                )
-                            )
-                        }
-                    },
-                    onTransferCompleted = { name ->
-                        _serverState.update {
-                            val current = it.activeTransfer
-                            if (current != null) {
-                                it.copy(activeTransfer = current.copy(progress = 1f, status = TransferStatus.COMPLETED))
-                            } else it
-                        }
-                        viewModelScope.launch {
-                            _eventFlow.emit(ViewModelEvent.SendSuccess)
-                            kotlinx.coroutines.delay(2500)
-                            _serverState.update {
-                                if (it.activeTransfer?.fileName == name) {
-                                    it.copy(activeTransfer = null)
-                                } else it
+                for (uri in uris) {
+                    var failed = false
+                    withContext(Dispatchers.IO) {
+                        sender.upload(
+                            uri = uri,
+                            onTransferStarted = { name, size ->
+                                runOnMain {
+                                    _serverState.update {
+                                        it.copy(
+                                            activeTransfer = ActiveTransfer(
+                                                fileName = name,
+                                                progress = 0f,
+                                                bytesRead = 0,
+                                                totalBytes = size,
+                                                status = TransferStatus.IN_PROGRESS
+                                            )
+                                        )
+                                    }
+                                }
+                            },
+                            onTransferProgress = { read, total ->
+                                val now = SystemClock.elapsedRealtime()
+                                if (read < total && now - lastSendProgressMs < 80) return@upload
+                                lastSendProgressMs = now
+                                runOnMain {
+                                    _serverState.update {
+                                        val current = it.activeTransfer ?: return@update it
+                                        val percentage =
+                                            if (total > 0) read.toFloat() / total.toFloat() else 0f
+                                        it.copy(
+                                            activeTransfer = current.copy(
+                                                progress = percentage,
+                                                bytesRead = read,
+                                                totalBytes = total
+                                            )
+                                        )
+                                    }
+                                }
+                            },
+                            onTransferCompleted = { name ->
+                                runOnMain {
+                                    _serverState.update {
+                                        val current = it.activeTransfer
+                                        if (current != null) {
+                                            it.copy(
+                                                activeTransfer = current.copy(
+                                                    progress = 1f,
+                                                    status = TransferStatus.COMPLETED
+                                                )
+                                            )
+                                        } else it
+                                    }
+                                }
+                                viewModelScope.launch {
+                                    _eventFlow.emit(ViewModelEvent.SendSuccess)
+                                    kotlinx.coroutines.delay(2500)
+                                    runOnMain {
+                                        _serverState.update {
+                                            if (it.activeTransfer?.fileName == name) {
+                                                it.copy(activeTransfer = null)
+                                            } else it
+                                        }
+                                    }
+                                }
+                            },
+                            onTransferFailed = { error ->
+                                failed = true
+                                runOnMain {
+                                    _serverState.update {
+                                        val current = it.activeTransfer
+                                        if (current != null) {
+                                            it.copy(
+                                                activeTransfer = current.copy(
+                                                    status = TransferStatus.FAILED
+                                                )
+                                            )
+                                        } else it
+                                    }
+                                }
+                                viewModelScope.launch {
+                                    _eventFlow.emit(ViewModelEvent.Error("Send failed: $error"))
+                                    kotlinx.coroutines.delay(4000)
+                                    runOnMain {
+                                        _serverState.update {
+                                            if (it.activeTransfer?.status == TransferStatus.FAILED) {
+                                                it.copy(activeTransfer = null)
+                                            } else it
+                                        }
+                                    }
+                                }
                             }
-                        }
-                    },
-                    onTransferFailed = { error ->
-                        failed = true
-                        _serverState.update {
-                            val current = it.activeTransfer
-                            if (current != null) {
-                                it.copy(activeTransfer = current.copy(status = TransferStatus.FAILED))
-                            } else it
-                        }
-                        viewModelScope.launch {
-                            _eventFlow.emit(ViewModelEvent.Error("Send failed: $error"))
-                            kotlinx.coroutines.delay(4000)
-                            _serverState.update {
-                                if (it.activeTransfer?.status == TransferStatus.FAILED) {
-                                    it.copy(activeTransfer = null)
-                                } else it
-                            }
-                        }
+                        )
                     }
-                )
-                if (failed) break
+                    if (failed) break
+                }
+            } finally {
+                releaseLocks()
             }
-            releaseLocks()
         }
     }
 
@@ -438,30 +491,48 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         stopServer()
     }
 
-    // Helper locks to keep Wi-Fi and CPU active during transfer
+    // Reference-counted locks so send + receive can overlap without releasing server locks early.
     private fun acquireLocks() {
-        try {
-            val powerManager = getApplication<Application>().getSystemService(Context.POWER_SERVICE) as PowerManager
-            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AirReceive::ServerWakeLock").apply {
-                acquire(10 * 60 * 1000L) // 10 mins max
+        if (lockRefCount == 0) {
+            try {
+                val powerManager =
+                    getApplication<Application>().getSystemService(Context.POWER_SERVICE) as PowerManager
+                wakeLock = powerManager.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "AirReceive::ServerWakeLock"
+                ).apply {
+                    setReferenceCounted(false)
+                    acquire(10 * 60 * 1000L)
+                }
+
+                val wifiManager =
+                    getApplication<Application>().applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                @Suppress("DEPRECATION")
+                wifiLock = wifiManager.createWifiLock(
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                    "AirReceive::ServerWifiLock"
+                ).apply {
+                    acquire()
+                }
+            } catch (e: Exception) {
+                Log.e("AirReceiveViewModel", "Failed to acquire power locks", e)
+                return
             }
-            
-            val wifiManager = getApplication<Application>().applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "AirReceive::ServerWifiLock").apply {
-                acquire()
-            }
-        } catch (e: Exception) {
-            Log.e("AirReceiveViewModel", "Failed to acquire power locks", e)
         }
+        lockRefCount++
     }
 
     private fun releaseLocks() {
+        if (lockRefCount <= 0) return
+        lockRefCount--
+        if (lockRefCount > 0) return
+
         try {
             if (wakeLock?.isHeld == true) {
                 wakeLock?.release()
             }
             wakeLock = null
-            
+
             if (wifiLock?.isHeld == true) {
                 wifiLock?.release()
             }

@@ -54,7 +54,9 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import coil.compose.AsyncImage
 import com.example.data.ReceivedPhoto
 import com.example.ui.theme.MyApplicationTheme
@@ -90,27 +92,33 @@ class MainActivity : ComponentActivity() {
 
     private fun lifecycleScopeLaunch() {
         lifecycleScope.launch {
-            viewModel.eventFlow.collectLatest { event ->
-                when (event) {
-                    is ViewModelEvent.TransferSuccess -> {
-                        playAirDropChime()
-                        triggerSuccessVibration()
-                    }
-                    is ViewModelEvent.SendSuccess -> {
-                        playAirDropChime()
-                        triggerSuccessVibration()
-                        Toast.makeText(
-                            this@MainActivity,
-                            "Photo sent to iPhone. Save it from Safari on the receive page.",
-                            Toast.LENGTH_LONG
-                        ).show()
-                    }
-                    is ViewModelEvent.Error -> {
-                        Toast.makeText(this@MainActivity, event.message, Toast.LENGTH_LONG).show()
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                viewModel.eventFlow.collect { event ->
+                    if (isFinishing || isDestroyed) return@collect
+                    when (event) {
+                        is ViewModelEvent.TransferSuccess -> {
+                            playAirDropChime()
+                            triggerSuccessVibration()
+                        }
+                        is ViewModelEvent.SendSuccess -> {
+                            playAirDropChime()
+                            triggerSuccessVibration()
+                            showToast(
+                                "Photo sent to iPhone. Save it from Safari on the receive page."
+                            )
+                        }
+                        is ViewModelEvent.Error -> {
+                            showToast(event.message)
+                        }
                     }
                 }
             }
         }
+    }
+
+    private fun showToast(message: String) {
+        if (isFinishing || isDestroyed) return
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 
     private fun playAirDropChime() {
