@@ -464,15 +464,154 @@ app.get('/download/:id', (req, res) => {
   });
 });
 
-// Self-contained elegant frontend index page HTML
+function gatewayNavHtml(activeNav) {
+  const items = [
+    { key: 'home', href: '/', label: 'Home' },
+    { key: 'android', href: '/to-android', label: 'Send to Android' },
+    { key: 'send', href: '/send', label: 'Send to device' },
+    { key: 'receive', href: '/receive', label: 'Receive' }
+  ];
+  return '<nav class="gateway-nav">' + items.map((item) => {
+    const cls = item.key === activeNav ? 'gateway-nav-link active' : 'gateway-nav-link';
+    return '<a class="' + cls + '" href="' + item.href + '">' + item.label + '</a>';
+  }).join('') + '</nav>';
+}
+
+function gatewayPageHtml({ title, activeNav, accent = '#38bdf8', extraCss = '', bodyHtml }) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-color: #0d1117;
+      --card-bg: #161b22;
+      --border-color: #30363d;
+      --primary: ${accent};
+      --text-main: #f0f6fc;
+      --text-muted: #8b949e;
+    }
+    body {
+      margin: 0;
+      background: var(--bg-color);
+      color: var(--text-main);
+      font-family: 'Plus Jakarta Sans', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container { width: 90%; max-width: 560px; margin: 24px auto; }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 20px;
+      padding: 32px;
+      text-align: center;
+    }
+    h1 { font-size: 24px; margin: 0 0 8px; }
+    .tagline { color: var(--text-muted); font-size: 14px; margin-bottom: 20px; }
+    .gateway-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      margin-bottom: 24px;
+    }
+    .gateway-nav-link {
+      padding: 8px 14px;
+      border-radius: 100px;
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .gateway-nav-link:hover { border-color: var(--primary); color: var(--primary); }
+    .gateway-nav-link.active {
+      border-color: var(--primary);
+      color: var(--primary);
+      background: rgba(56, 189, 248, 0.08);
+    }
+    ${extraCss}
+  </style>
+</head>
+<body>
+  <div class="container">
+    ${gatewayNavHtml(activeNav)}
+    ${bodyHtml}
+  </div>
+</body>
+</html>`;
+}
+
+// Hub — pick an action (no upload on this page)
 app.get('/', (req, res) => {
+  res.send(gatewayPageHtml({
+    title: 'AirReceive Gateway',
+    activeNav: 'home',
+    accent: '#38bdf8',
+    extraCss: `
+    .hub-card {
+      display: block;
+      text-align: left;
+      padding: 20px;
+      margin-bottom: 12px;
+      border-radius: 16px;
+      border: 1px solid var(--border-color);
+      background: rgba(22, 27, 34, 0.9);
+      color: var(--text-main);
+      text-decoration: none;
+      transition: border-color 0.15s;
+    }
+    .hub-card:hover { border-color: var(--primary); }
+    .hub-card strong { display: block; font-size: 16px; margin-bottom: 6px; color: var(--primary); }
+    .hub-card span { font-size: 13px; color: var(--text-muted); line-height: 1.4; }
+    .hub-status { font-size: 12px; color: var(--text-muted); margin-top: 16px; }
+    `,
+    bodyHtml: `
+    <div class="card" style="text-align:center;">
+      <h1>AirReceive Gateway</h1>
+      <p class="tagline">Choose what you want to do</p>
+      <a class="hub-card" href="/to-android">
+        <strong>Send to Android</strong>
+        <span>Upload a photo from this browser to your Android phone running AirReceive.</span>
+      </a>
+      <a class="hub-card" href="/send">
+        <strong>Send to PC or phone</strong>
+        <span>Pick an online receiver and send up to 20 files (images, PDF, etc.).</span>
+      </a>
+      <a class="hub-card" href="/receive">
+        <strong>Receive files</strong>
+        <span>Stay on this page to receive files sent from another device or Android.</span>
+      </a>
+      <p class="hub-status" id="hubStatus">Checking gateway status...</p>
+    </div>
+    <script>
+      fetch('/api/status').then(r => r.json()).then((d) => {
+        const el = document.getElementById('hubStatus');
+        el.textContent = 'Android apps: ' + (d.devices?.phones ?? d.connectionsCount ?? 0) +
+          ' online · Receivers: ' + (d.devices?.receivers ?? d.receiverCount ?? 0) + ' online';
+      }).catch(() => {
+        document.getElementById('hubStatus').textContent = 'Could not load status.';
+      });
+    </script>
+    `
+  }));
+});
+
+// Send photo to Android (browser upload)
+app.get('/to-android', (req, res) => {
   res.send(`
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AirReceive Cloud Gateway</title>
+  <title>AirReceive — Send to Android</title>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
   <style>
     :root {
@@ -762,11 +901,34 @@ app.get('/', (req, res) => {
       border-color: var(--accent);
       background-color: rgba(56, 189, 248, 0.08);
     }
+    .gateway-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      margin-bottom: 20px;
+    }
+    .gateway-nav-link {
+      padding: 8px 14px;
+      border-radius: 100px;
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .gateway-nav-link:hover { border-color: var(--accent); color: var(--accent); }
+    .gateway-nav-link.active {
+      border-color: var(--accent);
+      color: var(--accent);
+      background: rgba(16, 185, 129, 0.1);
+    }
   </style>
 </head>
 <body>
 
   <div class="container">
+    ${gatewayNavHtml('android')}
     <div class="card">
       <div class="logo-container">
         <!-- Photo/Image transfer vector icon -->
@@ -775,11 +937,8 @@ app.get('/', (req, res) => {
         </svg>
       </div>
 
-      <h1>AirReceive Gateway</h1>
-      <p class="tagline">Send photos to your Android device from any browser</p>
-
-      <a class="nav-link" href="/send">Send to PC / phone &rarr;</a>
-      <a class="nav-link" href="/receive">Receive files &rarr;</a>
+      <h1>Send to Android</h1>
+      <p class="tagline">Upload a photo from this browser to your Android phone</p>
 
       <div class="status-badge" id="statusBadge">
         <span class="dot"></span>
@@ -1131,15 +1290,34 @@ app.get('/send', (req, res) => {
       cursor: pointer;
       margin-bottom: 8px;
     }
+    .gateway-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      margin-bottom: 20px;
+    }
+    .gateway-nav-link {
+      padding: 8px 14px;
+      border-radius: 100px;
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .gateway-nav-link:hover { border-color: var(--primary); color: var(--primary); }
+    .gateway-nav-link.active {
+      border-color: var(--primary);
+      color: var(--primary);
+      background: rgba(56, 189, 248, 0.08);
+    }
   </style>
 </head>
 <body>
   <div class="container">
+    ${gatewayNavHtml('send')}
     <div class="card">
-      <div class="nav-row">
-        <a class="nav-link" href="/receive">Receive</a>
-        <a class="nav-link" href="/">Send to Android</a>
-      </div>
       <h1>Send files</h1>
       <p class="tagline">Send images and files to another PC or phone on this gateway</p>
 
@@ -1511,15 +1689,34 @@ app.get('/receive', (req, res) => {
       text-align: left;
     }
     .file-row-meta { font-size: 11px; color: var(--text-muted); }
+    .gateway-nav {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: center;
+      margin-bottom: 20px;
+    }
+    .gateway-nav-link {
+      padding: 8px 14px;
+      border-radius: 100px;
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .gateway-nav-link:hover { border-color: var(--primary); color: var(--primary); }
+    .gateway-nav-link.active {
+      border-color: var(--primary);
+      color: var(--primary);
+      background: rgba(56, 189, 248, 0.08);
+    }
   </style>
 </head>
 <body>
   <div class="container">
+    ${gatewayNavHtml('receive')}
     <div class="card">
-      <div class="nav-row">
-        <a class="nav-link" href="/send">Send files &rarr;</a>
-        <a class="nav-link" href="/">Send to Android</a>
-      </div>
       <h1>Receive photos</h1>
       <p class="tagline">Receive on iPhone, PC, or any browser — keep this tab open while sending</p>
 

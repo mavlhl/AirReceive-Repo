@@ -60,8 +60,12 @@ import androidx.lifecycle.repeatOnLifecycle
 import coil.compose.AsyncImage
 import com.example.data.ReceivedPhoto
 import com.example.server.GatewayReceiverDevice
+import com.example.ui.navigation.AirReceiveNavHost
+import com.example.ui.navigation.AppRoute
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.*
+import androidx.navigation.compose.currentBackStackEntryAsState
+import androidx.navigation.compose.rememberNavController
 import com.example.util.GallerySaver
 import com.example.util.QrCodeGenerator
 import kotlinx.coroutines.flow.collectLatest
@@ -164,6 +168,11 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
     val photoList by viewModel.receivedPhotos.collectAsStateWithLifecycle()
     var selectedPhotoForView by remember { mutableStateOf<ReceivedPhoto?>(null) }
 
+    val navController = rememberNavController()
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route ?: AppRoute.Home
+    val needsGatewaySetup = serverState.customUrl.isEmpty()
+
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -194,172 +203,63 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
                 )
             )
         },
+        bottomBar = {
+            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+                NavigationBarItem(
+                    selected = currentRoute == AppRoute.Home,
+                    onClick = { navController.navigate(AppRoute.Home) { launchSingleTop = true } },
+                    icon = { Icon(Icons.Default.Home, contentDescription = "Home") },
+                    label = { Text("Home") }
+                )
+                NavigationBarItem(
+                    selected = currentRoute == AppRoute.Send,
+                    onClick = { navController.navigate(AppRoute.Send) { launchSingleTop = true } },
+                    icon = {
+                        if (needsGatewaySetup) {
+                            BadgedBox(badge = { Badge { Text("") } }) {
+                                Icon(Icons.Default.Send, contentDescription = "Send")
+                            }
+                        } else {
+                            Icon(Icons.Default.Send, contentDescription = "Send")
+                        }
+                    },
+                    label = { Text("Send") }
+                )
+                NavigationBarItem(
+                    selected = currentRoute == AppRoute.Gallery,
+                    onClick = { navController.navigate(AppRoute.Gallery) { launchSingleTop = true } },
+                    icon = {
+                        if (photoList.isNotEmpty()) {
+                            BadgedBox(badge = { Badge { Text("${photoList.size.coerceAtMost(99)}") } }) {
+                                Icon(Icons.Default.Collections, contentDescription = "Gallery")
+                            }
+                        } else {
+                            Icon(Icons.Default.Collections, contentDescription = "Gallery")
+                        }
+                    },
+                    label = { Text("Gallery") }
+                )
+                NavigationBarItem(
+                    selected = currentRoute == AppRoute.Settings,
+                    onClick = { navController.navigate(AppRoute.Settings) { launchSingleTop = true } },
+                    icon = { Icon(Icons.Default.Settings, contentDescription = "Settings") },
+                    label = { Text("Settings") }
+                )
+            }
+        },
         containerColor = MaterialTheme.colorScheme.background
     ) { innerPadding ->
-        Box(
+        AirReceiveNavHost(
+            navController = navController,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            // Main Dashboard Dynamic Grid
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                // Connection Status Card
-                ServerStatusCard(
-                    state = serverState,
-                    onToggleServer = {
-                        if (serverState.isRunning) {
-                            viewModel.stopServer()
-                        } else {
-                            viewModel.startServer()
-                        }
-                    },
-                    onRefreshNetwork = {
-                        viewModel.refreshNetworkInfo()
-                        Toast.makeText(context, "Network status scanned", Toast.LENGTH_SHORT).show()
-                    },
-                    onApplyHostedGateway = {
-                        viewModel.applyHostedGateway()
-                        Toast.makeText(context, "Using free AirReceive gateway", Toast.LENGTH_SHORT).show()
-                    },
-                    onClearGateway = {
-                        viewModel.clearGateway()
-                        Toast.makeText(context, "Reset to local Wi-Fi mode", Toast.LENGTH_SHORT).show()
-                    },
-                    onUpdateCustomUrl = { url ->
-                        viewModel.setCustomUrl(url)
-                        Toast.makeText(context, "Custom gateway URL saved!", Toast.LENGTH_SHORT).show()
-                    }
-                )
-
-                // Sharing Instructions & QR-Code Panel
-                if (serverState.isRunning && serverState.serverUrl.isNotEmpty() && serverState.customUrl.isEmpty()) {
-                    SharePortalPanel(url = serverState.serverUrl)
-                }
-
-                // Send to iPhone (requires public gateway URL — always show this section)
-                if (serverState.customUrl.isNotEmpty()) {
-                    val receiveUrl = remember(serverState.customUrl) {
-                        serverState.customUrl.removeSuffix("/") + "/receive"
-                    }
-                    LaunchedEffect(serverState.customUrl) {
-                        viewModel.refreshReceivers()
-                    }
-                    SendToIphonePanel(
-                        receiveUrl = receiveUrl,
-                        onlineReceivers = serverState.onlineReceivers,
-                        selectedReceiverId = serverState.selectedReceiverId,
-                        onSelectReceiver = { viewModel.selectReceiver(it) },
-                        onRefreshReceivers = { viewModel.refreshReceivers() },
-                        onSendPhotos = { viewModel.sendPhotosToGateway(it) }
-                    )
-                } else {
-                    SendToIphoneSetupCard()
-                }
-
-                // Active Download Progress Tracker
-                AnimatedVisibility(
-                    visible = serverState.activeTransfer != null,
-                    enter = fadeIn() + expandVertically(),
-                    exit = fadeOut() + shrinkVertically()
-                ) {
-                    serverState.activeTransfer?.let { transfer ->
-                        ActiveTransferCard(transfer = transfer)
-                    }
-                }
-
-                // Photos Grid header
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(
-                            text = "RECEIVED PHOTOS",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 1.sp,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant)
-                                .padding(horizontal = 6.dp, vertical = 2.dp)
-                        ) {
-                            Text(
-                                text = "${photoList.size}",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                    }
-
-                    if (photoList.isNotEmpty()) {
-                        Text(
-                            text = "Clear All",
-                            color = MaterialTheme.colorScheme.error,
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier
-                                .testTag("btn_clear_all")
-                                .clickable {
-                                    viewModel.clearAllPhotos()
-                                    Toast.makeText(context, "Gallery cleared", Toast.LENGTH_SHORT).show()
-                                }
-                        )
-                    }
-                }
-
-                // Gallery Container
-                if (photoList.isEmpty()) {
-                    EmptyGalleryState(serverState.isRunning)
-                } else {
-                    GalleryGridView(
-                        photos = photoList,
-                        onPhotoClick = { selectedPhotoForView = it },
-                        onShareClick = { sharePhotoFile(context, File(it.filePath), it.mimeType) },
-                        onDeleteClick = { viewModel.deletePhoto(it) }
-                    )
-                }
-            }
-
-            // Image Fullscreen Preview Overlay Modal
-            selectedPhotoForView?.let { photo ->
-                FullscreenPhotoViewer(
-                    photo = photo,
-                    onDismiss = { selectedPhotoForView = null },
-                    onSaveToDisk = {
-                        val file = File(photo.filePath)
-                        val ok = GallerySaver.saveToPublicGallery(
-                            context = context,
-                            file = file,
-                            fileName = photo.fileName,
-                            mimeType = photo.mimeType
-                        )
-                        if (ok) {
-                            Toast.makeText(context, "Saved to device Photo Album successfully", Toast.LENGTH_LONG).show()
-                        } else {
-                            Toast.makeText(context, "Failed to export photo", Toast.LENGTH_SHORT).show()
-                        }
-                    },
-                    onSharePhoto = { sharePhotoFile(context, File(photo.filePath), photo.mimeType) },
-                    onDeletePhoto = {
-                        viewModel.deletePhoto(photo)
-                        selectedPhotoForView = null
-                        Toast.makeText(context, "Photo deleted", Toast.LENGTH_SHORT).show()
-                    }
-                )
-            }
-        }
+                .padding(innerPadding),
+            viewModel = viewModel,
+            serverState = serverState,
+            photoList = photoList,
+            selectedPhotoForView = selectedPhotoForView,
+            onPhotoSelected = { selectedPhotoForView = it }
+        )
     }
 }
 
@@ -402,9 +302,7 @@ fun ServerStatusCard(
     state: ServerState,
     onToggleServer: () -> Unit,
     onRefreshNetwork: () -> Unit,
-    onApplyHostedGateway: () -> Unit,
-    onClearGateway: () -> Unit,
-    onUpdateCustomUrl: (String) -> Unit
+    onOpenSettings: () -> Unit
 ) {
     val transition = rememberInfiniteTransition(label = "pulse_state")
     val alphaAnim by transition.animateFloat(
@@ -416,16 +314,6 @@ fun ServerStatusCard(
         ),
         label = "pulse_alpha"
     )
-
-    var showAdvancedSettings by remember { mutableStateOf(false) }
-    var showCustomField by remember(state.gatewaySelection) {
-        mutableStateOf(state.gatewaySelection == GatewaySelection.CUSTOM)
-    }
-    var inputUrl by remember(state.customUrl, state.gatewaySelection) {
-        mutableStateOf(
-            if (state.gatewaySelection == GatewaySelection.CUSTOM) state.customUrl else ""
-        )
-    }
 
     Card(
         modifier = Modifier
@@ -477,29 +365,6 @@ fun ServerStatusCard(
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
-                        onClick = { showAdvancedSettings = !showAdvancedSettings },
-                        modifier = Modifier
-                            .clip(CircleShape)
-                            .background(
-                                if (showAdvancedSettings || state.customUrl.isNotEmpty()) 
-                                    MaterialTheme.colorScheme.primaryContainer 
-                                else 
-                                    MaterialTheme.colorScheme.surfaceVariant
-                            )
-                            .size(36.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Settings,
-                            contentDescription = "Public Tunnel Setup",
-                            tint = if (showAdvancedSettings || state.customUrl.isNotEmpty())
-                                MaterialTheme.colorScheme.onPrimaryContainer
-                            else
-                                MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp)
-                        )
-                    }
-                    Spacer(modifier = Modifier.width(8.dp))
-                    IconButton(
                         onClick = onRefreshNetwork,
                         modifier = Modifier
                             .clip(CircleShape)
@@ -516,103 +381,26 @@ fun ServerStatusCard(
                 }
             }
 
-            AnimatedVisibility(
-                visible = showAdvancedSettings,
-                enter = fadeIn() + expandVertically(),
-                exit = fadeOut() + shrinkVertically()
+            TextButton(
+                onClick = onOpenSettings,
+                modifier = Modifier.padding(top = 8.dp)
             ) {
-                Column(modifier = Modifier.padding(top = 16.dp)) {
-                    Text(
-                        text = "PUBLIC GATEWAY MODE",
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary,
-                        letterSpacing = 0.8.sp
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = "Use the free AirReceive cloud gateway or your own Render URL for cross-network transfers.",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(12.dp))
-
-                    GatewayOptionRow(
-                        label = "Free AirReceive gateway",
-                        subtitle = AirReceiveViewModel.HOSTED_GATEWAY_URL,
-                        selected = state.gatewaySelection == GatewaySelection.HOSTED && !showCustomField,
-                        onClick = {
-                            showCustomField = false
-                            onApplyHostedGateway()
-                        }
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    GatewayOptionRow(
-                        label = "My own cloud portal",
-                        subtitle = "Paste your Render or custom HTTPS URL",
-                        selected = state.gatewaySelection == GatewaySelection.CUSTOM || showCustomField,
-                        onClick = { showCustomField = true }
-                    )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    GatewayOptionRow(
-                        label = "Local Wi-Fi only",
-                        subtitle = "No public gateway (same network)",
-                        selected = state.gatewaySelection == GatewaySelection.NONE && !showCustomField,
-                        onClick = {
-                            showCustomField = false
-                            onClearGateway()
-                        }
-                    )
-
-                    AnimatedVisibility(
-                        visible = showCustomField || state.gatewaySelection == GatewaySelection.CUSTOM,
-                        enter = fadeIn() + expandVertically(),
-                        exit = fadeOut() + shrinkVertically()
-                    ) {
-                        Column(modifier = Modifier.padding(top = 12.dp)) {
-                            OutlinedTextField(
-                                value = inputUrl,
-                                onValueChange = { inputUrl = it },
-                                modifier = Modifier.fillMaxWidth(),
-                                placeholder = { Text("https://your-app.onrender.com", fontSize = 13.sp) },
-                                singleLine = true,
-                                textStyle = androidx.compose.ui.text.TextStyle(
-                                    fontSize = 13.sp,
-                                    fontFamily = FontFamily.Monospace
-                                ),
-                                trailingIcon = {
-                                    Row(verticalAlignment = Alignment.CenterVertically) {
-                                        if (inputUrl.isNotEmpty()) {
-                                            IconButton(onClick = { inputUrl = "" }) {
-                                                Icon(
-                                                    Icons.Default.Clear,
-                                                    contentDescription = "Clear",
-                                                    modifier = Modifier.size(18.dp)
-                                                )
-                                            }
-                                        }
-                                        IconButton(onClick = { onUpdateCustomUrl(inputUrl) }) {
-                                            Icon(
-                                                Icons.Default.Check,
-                                                contentDescription = "Save",
-                                                tint = MaterialTheme.colorScheme.primary,
-                                                modifier = Modifier.size(18.dp)
-                                            )
-                                        }
-                                    }
-                                },
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                                )
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
+                Text(
+                    text = "Gateway settings",
+                    color = MaterialTheme.colorScheme.primary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                Spacer(modifier = Modifier.width(4.dp))
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowRight,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(18.dp)
+                )
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(8.dp))
 
             if (state.isRunning && state.serverUrl.isNotEmpty()) {
                 Box(
@@ -662,7 +450,7 @@ fun ServerStatusCard(
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
-                            text = "Please connect to a Wi-Fi network or configure a Public Gateway URL above.",
+                            text = "Please connect to a Wi-Fi network or configure a gateway in Settings.",
                             fontSize = 12.sp,
                             color = Color(0xFFFCA5A5)
                         )
@@ -831,7 +619,7 @@ fun SharePortalPanel(url: String) {
 }
 
 @Composable
-fun SendToIphoneSetupCard() {
+fun SendToIphoneSetupCard(onOpenSettings: () -> Unit = {}) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(28.dp),
@@ -854,11 +642,15 @@ fun SendToIphoneSetupCard() {
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "1. Tap the gear icon on the status card above.\n2. Choose Free AirReceive gateway or enter your own Render URL.\n3. The send panel appears when a gateway is active.",
+                text = "1. Open the Settings tab.\n2. Choose Free AirReceive gateway or enter your own Render URL.\n3. Use the Send tab to pick a receiver and transfer files.",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurface,
                 lineHeight = 18.sp
             )
+            Spacer(modifier = Modifier.height(10.dp))
+            TextButton(onClick = onOpenSettings) {
+                Text("Open Settings", color = Color(0xFF38BDF8), fontWeight = FontWeight.SemiBold)
+            }
         }
     }
 }

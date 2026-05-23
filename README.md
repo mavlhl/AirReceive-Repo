@@ -9,6 +9,11 @@ This repo contains two parts that work together:
 | **Android app** (`app/`) | Runs on your phone, receives images, keeps an in-app gallery, and can save to the device photo library. |
 | **Public gateway** (`server.js`) | Node.js relay: browser ↔ Android (both directions) over WebSockets and temporary file storage. |
 
+## Thank you for supporting Maverick!
+You can donate a buck to support Maverick in continue updating this repo!
+
+![Buy Me a Coffee QR code](docs/bmc-qr.png)
+
 ## How it works
 
 ### Local Wi‑Fi mode (default)
@@ -24,26 +29,38 @@ For senders who are **not** on the same network, deploy the included gateway ser
 3. Notifies the Android app over a WebSocket (`/ws/phone`).
 4. Lets the app download the file via `GET /download/:id`, then deletes it from the server.
 
-In the app, open **Settings** (gear icon) on the status card and choose:
+In the app, open the **Settings** tab and choose:
 
 - **Free AirReceive gateway** — uses `https://airreceive-repo.onrender.com` (no paste required), or
 - **My own cloud portal** — paste your Render URL (for example `https://your-app.onrender.com`) and tap the checkmark.
 
 The status badge on the gateway home page turns green when your Android phone is connected.
 
+### Android app tabs
+
+The app uses a bottom navigation bar:
+
+| Tab | Purpose |
+|-----|---------|
+| **Home** | Start/stop receiver, local Wi‑Fi QR link, active transfers |
+| **Send** | Pick an online receiver and send photos or files (gateway mode) |
+| **Gallery** | View, share, and save received photos |
+| **Settings** | Free hosted gateway, custom Render URL, or local Wi‑Fi only |
+
 ### Gateway URLs
 
 | URL | Purpose |
 |-----|---------|
-| `https://your-app.onrender.com/` | Send photos **to Android** (any browser, including iPhone) |
-| `https://your-app.onrender.com/send` | Send files **from a PC/browser to another PC or phone** (pick target device first) |
-| `https://your-app.onrender.com/receive` | Receive files **on iPhone, PC, or any browser** (keep the tab open; choose a device name when prompted) |
+| `https://your-app.onrender.com/` | **Hub** — choose Send to Android, Send to device, or Receive |
+| `https://your-app.onrender.com/to-android` | Send a photo **to Android** from any browser |
+| `https://your-app.onrender.com/send` | Send files **to a chosen PC or phone** (device picker) |
+| `https://your-app.onrender.com/receive` | **Receive** files (keep the tab open; set a device name when prompted) |
 
 Uploads use `POST /upload` or `POST /upload/batch` with form field `target`: `phone` (to Android) or `receiver` (to `/receive`). Optional `targetDeviceId` sends only to one registered device (see `GET /api/devices`).
 
 ### Send from Android to iPhone or PC (gateway, batch)
 
-1. On Android, enable the gateway in settings (free hosted preset or your own URL).
+1. On Android, enable the gateway in the **Settings** tab (free hosted preset or your own URL).
 2. On the receiver device, open **`{gateway}/receive`**, enter a **device name** when prompted, and leave the tab in the foreground until status shows **Ready to Receive**.
 3. On Android, tap **Refresh** under **Send to**, select the target device, then **Select photos or files** (or **Photo gallery**).
 4. When files appear on the receive page:
@@ -98,7 +115,7 @@ npm install
 npm start
 ```
 
-The server listens on port `8080` by default (override with the `PORT` environment variable). Open `http://localhost:8080` in a browser to test uploads, and point the Android app’s gateway URL setting at that address when testing on the same machine or network.
+The server listens on port `8080` by default (override with the `PORT` environment variable). Open `http://localhost:8080` for the hub, then use `/to-android`, `/send`, or `/receive` as needed. Point the Android app’s gateway URL in **Settings** at the same base address when testing.
 
 Uploaded files are stored under `/tmp/airreceive_uploads` and expire after about five minutes if not downloaded.
 
@@ -108,7 +125,7 @@ Uploaded files are stored under `/tmp/airreceive_uploads` and expire after about
 
 1. Install and open **AirReceive** on your Android phone.
 2. **Same Wi‑Fi:** Share the app’s local URL or QR code; sender uploads from their browser.
-3. **Different networks:** Deploy `server.js`, paste the gateway URL into app settings, sender uses `https://your-gateway/` in a browser.
+3. **Different networks:** Deploy `server.js`, paste the gateway URL into the app **Settings** tab; sender uses `https://your-gateway/to-android` in a browser.
 
 **Send to iPhone or PC (batch)**
 
