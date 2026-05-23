@@ -41,8 +41,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import com.example.ui.theme.MacGlassBorder
-import com.example.ui.theme.MacGlassFill
 import com.example.ui.theme.MacShapeMedium
 import com.example.ui.theme.MacSpace2
 import com.example.ui.theme.MacSystemOrange
@@ -71,8 +69,8 @@ private fun CollapsibleSection(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MacShapeMedium,
-        colors = CardDefaults.cardColors(containerColor = MacGlassFill),
-        border = BorderStroke(1.dp, MacGlassBorder),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
     ) {
         Column(modifier = Modifier.padding(horizontal = MacSpace2, vertical = 14.dp)) {
             Row(
@@ -258,7 +256,7 @@ fun SettingsScreen(
                 .fillMaxWidth()
                 .clickable(onClick = onOpenSupport),
             shape = MacShapeMedium,
-            colors = CardDefaults.cardColors(containerColor = MacGlassFill),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
             border = BorderStroke(1.dp, MacSystemOrange.copy(alpha = 0.25f))
         ) {
             Row(
@@ -345,8 +343,8 @@ fun SettingsScreen(
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 shape = MacShapeMedium,
-                colors = CardDefaults.cardColors(containerColor = MacGlassFill),
-                border = BorderStroke(1.dp, MacGlassBorder)
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
             ) {
                 Column(modifier = Modifier.padding(20.dp)) {
                     Text(

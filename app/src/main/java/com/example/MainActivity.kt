@@ -24,12 +24,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.safeDrawing
-import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -75,9 +70,6 @@ import com.example.ui.components.MacSegmentedNavBar
 import com.example.ui.components.MacStatusDot
 import com.example.ui.navigation.AirReceiveNavHost
 import com.example.ui.navigation.AppRoute
-import com.example.ui.theme.MacContentBg
-import com.example.ui.theme.MacGlassBorder
-import com.example.ui.theme.MacGlassFill
 import com.example.ui.theme.MacRedContainer
 import com.example.ui.theme.MacShapeButton
 import com.example.ui.theme.MacShapeLarge
@@ -92,7 +84,6 @@ import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.*
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.example.util.DebugAgentLog
 import com.example.util.DonateLinks
 import com.example.util.rememberDarkThemePreference
 import com.example.util.GallerySaver
@@ -203,9 +194,6 @@ fun AirReceiveApp(
     onToggleTheme: () -> Unit,
 ) {
     val context = LocalContext.current
-    val density = androidx.compose.ui.platform.LocalDensity.current
-  val statusTop = WindowInsets.statusBars.getTop(density)
-  val navBottom = WindowInsets.navigationBars.getBottom(density)
     val serverState by viewModel.serverState.collectAsStateWithLifecycle()
     val photoList by viewModel.receivedPhotos.collectAsStateWithLifecycle()
     var selectedPhotoForView by remember { mutableStateOf<ReceivedPhoto?>(null) }
@@ -215,25 +203,6 @@ fun AirReceiveApp(
     val currentRoute = navBackStackEntry?.destination?.route ?: AppRoute.Gallery
     val needsGatewaySetup = serverState.customUrl.isEmpty()
     val showReceiverHint = !serverState.isRunning
-
-    val layoutInsets = WindowInsets.safeDrawing.asPaddingValues()
-    // #region agent log
-    LaunchedEffect(statusTop, navBottom, layoutInsets) {
-        DebugAgentLog.log(
-            location = "MainActivity.kt:ColumnLayout",
-            message = "Layout insets (post-fix)",
-            hypothesisId = "C",
-            runId = "post-fix",
-            data =
-                mapOf(
-                    "statusTopPx" to statusTop,
-                    "navBottomPx" to navBottom,
-                    "safeTopDp" to layoutInsets.calculateTopPadding().value,
-                    "safeBottomDp" to layoutInsets.calculateBottomPadding().value,
-                ),
-        )
-    }
-    // #endregion
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -383,8 +352,8 @@ fun ServerStatusCard(
             .fillMaxWidth()
             .testTag("status_card"),
         shape = MacShapeMedium,
-        colors = CardDefaults.cardColors(containerColor = MacGlassFill),
-        border = BorderStroke(1.dp, MacGlassBorder)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
     ) {
         Column(
             modifier = Modifier.padding(20.dp)
@@ -563,8 +532,8 @@ fun SharePortalPanel(url: String) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MacShapeMedium,
-        colors = CardDefaults.cardColors(containerColor = MacGlassFill),
-        border = BorderStroke(1.dp, MacGlassBorder)
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
     ) {
         Column(
             modifier = Modifier.padding(20.dp),
@@ -603,7 +572,7 @@ fun SharePortalPanel(url: String) {
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .background(Color(0xFFF3F4F6)),
+                                .background(MaterialTheme.colorScheme.surfaceVariant),
                             contentAlignment = Alignment.Center
                         ) {
                             Icon(
@@ -695,7 +664,7 @@ fun SupportMaverickPanel() {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MacShapeMedium,
-        colors = CardDefaults.cardColors(containerColor = MacGlassFill),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MacSystemOrange.copy(alpha = 0.35f))
     ) {
         Column(
@@ -762,7 +731,7 @@ fun SupportMaverickPanel() {
                 shape = MacShapeButton,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MacSystemOrange,
-                    contentColor = MacContentBg
+                    contentColor = MaterialTheme.colorScheme.onPrimary
                 )
             ) {
                 Icon(
@@ -782,7 +751,7 @@ fun SendToIphoneSetupCard(onOpenSettings: () -> Unit = {}) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MacShapeMedium,
-        colors = CardDefaults.cardColors(containerColor = MacGlassFill),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MacSystemBlue.copy(alpha = 0.25f))
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
@@ -857,7 +826,7 @@ fun LocalWifiSendPanel(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MacShapeMedium,
-        colors = CardDefaults.cardColors(containerColor = MacGlassFill),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MacSystemGreen.copy(alpha = 0.35f))
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
@@ -935,9 +904,9 @@ fun LocalWifiSendPanel(
                 shape = MacShapeButton,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MacSystemGreen,
-                    contentColor = MacContentBg,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
                     disabledContainerColor = MacSystemGreen.copy(alpha = 0.35f),
-                    disabledContentColor = MacContentBg.copy(alpha = 0.5f)
+                    disabledContentColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f)
                 )
             ) {
                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -998,7 +967,7 @@ fun SendToIphonePanel(
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = MacShapeMedium,
-        colors = CardDefaults.cardColors(containerColor = MacGlassFill),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         border = BorderStroke(1.dp, MacSystemBlue.copy(alpha = 0.35f))
     ) {
         Column(
@@ -1124,9 +1093,9 @@ fun SendToIphonePanel(
                 shape = MacShapeButton,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MacSystemBlue,
-                    contentColor = MacContentBg,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
                     disabledContainerColor = MacSystemBlue.copy(alpha = 0.35f),
-                    disabledContentColor = MacContentBg.copy(alpha = 0.5f)
+                    disabledContentColor = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.5f)
                 )
             ) {
                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))

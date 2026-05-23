@@ -12,8 +12,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import com.example.ui.theme.MacGlassBorder
-import com.example.ui.theme.MacGlassFill
 import com.example.ui.theme.MacShapeMedium
 import com.example.ui.theme.MacSpace2
 import androidx.compose.foundation.verticalScroll
@@ -83,8 +81,8 @@ fun SendScreen(
                 Card(
                     modifier = Modifier.fillMaxWidth(),
                     shape = MacShapeMedium,
-                    colors = CardDefaults.cardColors(containerColor = MacGlassFill),
-                    border = BorderStroke(1.dp, MacGlassBorder)
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f))
                 ) {
                     Column(modifier = Modifier.padding(20.dp)) {
                         Text(

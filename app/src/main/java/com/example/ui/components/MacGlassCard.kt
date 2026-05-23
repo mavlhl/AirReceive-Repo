@@ -12,7 +12,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.material3.MaterialTheme
-import com.example.ui.theme.MacGlassBorder
 import com.example.ui.theme.MacShapeLarge
 import com.example.ui.theme.MacShapeMedium
 import com.example.ui.theme.MacSpace2
@@ -27,11 +26,8 @@ fun MacGlassCard(
   Card(
     modifier = modifier,
     shape = if (useLargeRadius) MacShapeLarge else MacShapeMedium,
-    colors =
-      CardDefaults.cardColors(
-        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
-      ),
-    border = BorderStroke(Dp.Hairline, MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)),
+    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    border = BorderStroke(Dp.Hairline, MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
     elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
   ) {
     Column(modifier = Modifier.padding(contentPadding), content = content)
