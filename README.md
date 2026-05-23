@@ -10,8 +10,7 @@ This repo contains two parts that work together:
 | **Public gateway** (`server.js`) | Node.js relay: browser ↔ Android (both directions) over WebSockets and temporary file storage. |
 
 ## Thank you for supporting Maverick!
-You can donate a buck to support Maverick in continue updating this repo!
-
+You can donate a buck to support Maverick in continue updating this repo! https://buymeacoffee.com/mavlhl
 ![Buy Me a Coffee QR code](docs/bmc-qr.png)
 
 ## How it works
