@@ -222,13 +222,17 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
                         viewModel.refreshNetworkInfo()
                         Toast.makeText(context, "Network status scanned", Toast.LENGTH_SHORT).show()
                     },
+                    onApplyHostedGateway = {
+                        viewModel.applyHostedGateway()
+                        Toast.makeText(context, "Using free AirReceive gateway", Toast.LENGTH_SHORT).show()
+                    },
+                    onClearGateway = {
+                        viewModel.clearGateway()
+                        Toast.makeText(context, "Reset to local Wi-Fi mode", Toast.LENGTH_SHORT).show()
+                    },
                     onUpdateCustomUrl = { url ->
                         viewModel.setCustomUrl(url)
-                        if (url.isNotEmpty()) {
-                            Toast.makeText(context, "Public portal URL saved!", Toast.LENGTH_SHORT).show()
-                        } else {
-                            Toast.makeText(context, "Reset to local Wi-Fi mode", Toast.LENGTH_SHORT).show()
-                        }
+                        Toast.makeText(context, "Custom gateway URL saved!", Toast.LENGTH_SHORT).show()
                     }
                 )
 
@@ -352,10 +356,46 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
 }
 
 @Composable
+fun GatewayOptionRow(
+    label: String,
+    subtitle: String,
+    selected: Boolean,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        RadioButton(selected = selected, onClick = onClick)
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = label,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = subtitle,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+@Composable
 fun ServerStatusCard(
     state: ServerState,
     onToggleServer: () -> Unit,
     onRefreshNetwork: () -> Unit,
+    onApplyHostedGateway: () -> Unit,
+    onClearGateway: () -> Unit,
     onUpdateCustomUrl: (String) -> Unit
 ) {
     val transition = rememberInfiniteTransition(label = "pulse_state")
@@ -370,7 +410,14 @@ fun ServerStatusCard(
     )
 
     var showAdvancedSettings by remember { mutableStateOf(false) }
-    var inputUrl by remember(state.customUrl) { mutableStateOf(state.customUrl) }
+    var showCustomField by remember(state.gatewaySelection) {
+        mutableStateOf(state.gatewaySelection == GatewaySelection.CUSTOM)
+    }
+    var inputUrl by remember(state.customUrl, state.gatewaySelection) {
+        mutableStateOf(
+            if (state.gatewaySelection == GatewaySelection.CUSTOM) state.customUrl else ""
+        )
+    }
 
     Card(
         modifier = Modifier
@@ -468,7 +515,7 @@ fun ServerStatusCard(
             ) {
                 Column(modifier = Modifier.padding(top = 16.dp)) {
                     Text(
-                        text = "PUBLIC GATEWAY / PROXY DOMAIN SETUP",
+                        text = "PUBLIC GATEWAY MODE",
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.primary,
@@ -476,41 +523,83 @@ fun ServerStatusCard(
                     )
                     Spacer(modifier = Modifier.height(6.dp))
                     Text(
-                        text = "Paste your public 'Development App URL' (from your browser's address bar) to allow access from any phone on any network.",
+                        text = "Use the free AirReceive cloud gateway or your own Render URL for cross-network transfers.",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    Spacer(modifier = Modifier.height(8.dp))
-                    
-                    OutlinedTextField(
-                        value = inputUrl,
-                        onValueChange = { inputUrl = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("https://ais-dev-...run.app", fontSize = 13.sp) },
-                        singleLine = true,
-                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 13.sp, fontFamily = FontFamily.Monospace),
-                        trailingIcon = {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                if (inputUrl.isNotEmpty()) {
-                                    IconButton(onClick = {
-                                        inputUrl = ""
-                                        onUpdateCustomUrl("")
-                                    }) {
-                                        Icon(Icons.Default.Clear, contentDescription = "Clear", modifier = Modifier.size(18.dp))
-                                    }
-                                }
-                                IconButton(onClick = {
-                                    onUpdateCustomUrl(inputUrl)
-                                }) {
-                                    Icon(Icons.Default.Check, contentDescription = "Save", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
-                                }
-                            }
-                        },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                        )
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    GatewayOptionRow(
+                        label = "Free AirReceive gateway",
+                        subtitle = AirReceiveViewModel.HOSTED_GATEWAY_URL,
+                        selected = state.gatewaySelection == GatewaySelection.HOSTED && !showCustomField,
+                        onClick = {
+                            showCustomField = false
+                            onApplyHostedGateway()
+                        }
                     )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    GatewayOptionRow(
+                        label = "My own cloud portal",
+                        subtitle = "Paste your Render or custom HTTPS URL",
+                        selected = state.gatewaySelection == GatewaySelection.CUSTOM || showCustomField,
+                        onClick = { showCustomField = true }
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    GatewayOptionRow(
+                        label = "Local Wi-Fi only",
+                        subtitle = "No public gateway (same network)",
+                        selected = state.gatewaySelection == GatewaySelection.NONE && !showCustomField,
+                        onClick = {
+                            showCustomField = false
+                            onClearGateway()
+                        }
+                    )
+
+                    AnimatedVisibility(
+                        visible = showCustomField || state.gatewaySelection == GatewaySelection.CUSTOM,
+                        enter = fadeIn() + expandVertically(),
+                        exit = fadeOut() + shrinkVertically()
+                    ) {
+                        Column(modifier = Modifier.padding(top = 12.dp)) {
+                            OutlinedTextField(
+                                value = inputUrl,
+                                onValueChange = { inputUrl = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                placeholder = { Text("https://your-app.onrender.com", fontSize = 13.sp) },
+                                singleLine = true,
+                                textStyle = androidx.compose.ui.text.TextStyle(
+                                    fontSize = 13.sp,
+                                    fontFamily = FontFamily.Monospace
+                                ),
+                                trailingIcon = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (inputUrl.isNotEmpty()) {
+                                            IconButton(onClick = { inputUrl = "" }) {
+                                                Icon(
+                                                    Icons.Default.Clear,
+                                                    contentDescription = "Clear",
+                                                    modifier = Modifier.size(18.dp)
+                                                )
+                                            }
+                                        }
+                                        IconButton(onClick = { onUpdateCustomUrl(inputUrl) }) {
+                                            Icon(
+                                                Icons.Default.Check,
+                                                contentDescription = "Save",
+                                                tint = MaterialTheme.colorScheme.primary,
+                                                modifier = Modifier.size(18.dp)
+                                            )
+                                        }
+                                    }
+                                },
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline
+                                )
+                            )
+                        }
+                    }
                     Spacer(modifier = Modifier.height(8.dp))
                 }
             }
@@ -751,13 +840,13 @@ fun SendToIphoneSetupCard() {
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "To send photos to an iPhone, set up the public gateway first:",
+                text = "To send photos to iPhone or PC, set up the public gateway first:",
                 fontSize = 13.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "1. Tap the gear icon on the status card above.\n2. Paste your Render URL (e.g. https://airreceive-repo.onrender.com).\n3. Tap the checkmark to save.\n4. The \"Send Photos to iPhone\" button will appear here.",
+                text = "1. Tap the gear icon on the status card above.\n2. Choose Free AirReceive gateway or enter your own Render URL.\n3. The send panel appears when a gateway is active.",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurface,
                 lineHeight = 18.sp
@@ -772,10 +861,16 @@ fun SendToIphonePanel(
     onSendPhotos: (List<Uri>) -> Unit
 ) {
     val context = LocalContext.current
+    val maxBatch = com.example.server.AirReceiveGatewaySender.MAX_BATCH_FILES
+    val pickFilesLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            onSendPhotos(uris.take(maxBatch))
+        }
+    }
     val pickImagesLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickMultipleVisualMedia(
-            maxItems = com.example.server.AirReceiveGatewaySender.MAX_BATCH_FILES
-        )
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = maxBatch)
     ) { uris ->
         if (uris.isNotEmpty()) {
             onSendPhotos(uris)
@@ -797,7 +892,7 @@ fun SendToIphonePanel(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "SEND TO IPHONE (GATEWAY)",
+                text = "SEND PHOTOS (GATEWAY)",
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.2.sp,
@@ -806,7 +901,7 @@ fun SendToIphonePanel(
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "1. On iPhone, open the receive page in Safari and keep it in the foreground.\n2. Tap below and select up to 20 photos at once.",
+                text = "1. On iPhone or PC, open the receive page below and keep it in the foreground.\n2. Select up to 20 photos or image files from your device.",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.fillMaxWidth()
@@ -865,17 +960,13 @@ fun SendToIphonePanel(
             ) {
                 Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Copy iPhone Receive Link", fontWeight = FontWeight.SemiBold)
+                Text("Copy receive page link", fontWeight = FontWeight.SemiBold)
             }
 
             Spacer(modifier = Modifier.height(10.dp))
 
             Button(
-                onClick = {
-                    pickImagesLauncher.launch(
-                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                    )
-                },
+                onClick = { pickFilesLauncher.launch(arrayOf("image/*")) },
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("btn_send_to_iphone"),
@@ -887,7 +978,22 @@ fun SendToIphonePanel(
             ) {
                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
-                Text("Send Photos to iPhone (batch)", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+                Text("Select photos or files", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = {
+                    pickImagesLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                modifier = Modifier.fillMaxWidth(),
+                shape = CircleShape,
+                border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f))
+            ) {
+                Text("Photo gallery", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
             }
         }
     }

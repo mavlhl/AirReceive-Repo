@@ -24,28 +24,36 @@ For senders who are **not** on the same network, deploy the included gateway ser
 3. Notifies the Android app over a WebSocket (`/ws/phone`).
 4. Lets the app download the file via `GET /download/:id`, then deletes it from the server.
 
-In the app, open **Settings** on the status card and paste your gateway’s public URL (for example `https://your-app.onrender.com`). The status badge on the gateway home page turns green when your Android phone is connected.
+In the app, open **Settings** (gear icon) on the status card and choose:
+
+- **Free AirReceive gateway** — uses `https://airreceive-repo.onrender.com` (no paste required), or
+- **My own cloud portal** — paste your Render URL (for example `https://your-app.onrender.com`) and tap the checkmark.
+
+The status badge on the gateway home page turns green when your Android phone is connected.
 
 ### Gateway URLs
 
 | URL | Purpose |
 |-----|---------|
 | `https://your-app.onrender.com/` | Send photos **to Android** (any browser, including iPhone) |
-| `https://your-app.onrender.com/receive` | Receive photos **on iPhone** (Safari must stay open on this page) |
+| `https://your-app.onrender.com/receive` | Receive photos **on iPhone, PC, or any browser** (keep the tab open) |
 
 Uploads use `POST /upload` with form field `target`: `phone` (default, to Android) or `receiver` (to Safari on `/receive`).
 
-### Send from Android to iPhone (gateway, batch)
+### Send from Android to iPhone or PC (gateway, batch)
 
-1. On Android, save your gateway URL in app settings (same as receive mode).
-2. On iPhone, open **`{gateway}/receive`** in Safari and leave the tab in the foreground until status shows **Ready to Receive**.
-3. On Android, tap **Send Photos to iPhone (batch)** and select **up to 20 photos** at once.
-4. On iPhone, when the grid appears, tap **Save all to Photos**.
-5. On the iOS Share sheet, choose **Save Images** or **Add to Photos**.
+1. On Android, enable the gateway in settings (free hosted preset or your own URL).
+2. On the receiver device, open **`{gateway}/receive`** and leave the tab in the foreground until status shows **Ready to Receive**.
+   - **iPhone:** Safari recommended.
+   - **PC:** Chrome, Edge, or Firefox.
+3. On Android, tap **Select photos or files** (or **Photo gallery**) and choose **up to 20 images** (gallery or Files/Downloads).
+4. When thumbnails appear on the receive page:
+   - **iPhone:** tap **Save all to Photos**, then **Save Images** or **Add to Photos** on the Share sheet.
+   - **PC:** tap **Download all images** (files go to your Downloads folder; the browser may prompt per file).
 
-Android uploads via `POST /upload/batch` (`target=receiver`). The gateway sends one `NOTIFY_BATCH` WebSocket message; iPhone saves via the Web Share API, then the server cleans up with `DELETE /batch/:batchId`.
+Android uploads via `POST /upload/batch` (`target=receiver`). The gateway sends one `NOTIFY_BATCH` WebSocket message; the receiver saves via Share (iOS) or download links (desktop), then the server cleans up with `DELETE /batch/:batchId`.
 
-**Limits:** 20 images per batch, 100 MB total per batch. Use **Safari** on `/receive` (Chrome on iOS has weaker Share support).
+**Limits:** 20 images per batch, 100 MB total per batch. Image types only (`image/*`). Use **Safari** on iPhone for Share-to-Photos (Chrome on iOS has weaker Share support).
 
 ### Deploy / update on Render
 
@@ -97,18 +105,19 @@ Uploaded files are stored under `/tmp/airreceive_uploads` and expire after about
 2. **Same Wi‑Fi:** Share the app’s local URL or QR code; sender uploads from their browser.
 3. **Different networks:** Deploy `server.js`, paste the gateway URL into app settings, sender uses `https://your-gateway/` in a browser.
 
-**Send to iPhone (batch)**
+**Send to iPhone or PC (batch)**
 
-1. Gateway deployed; Android app has gateway URL saved.
-2. iPhone opens `{gateway}/receive` in Safari (foreground).
-3. Android selects multiple photos and sends one batch.
-4. iPhone taps **Save all to Photos** and confirms on the Share sheet.
+1. Gateway active in Android settings (hosted preset or custom URL).
+2. Receiver opens `{gateway}/receive` (Safari on iPhone, or a desktop browser on PC).
+3. Android uses **Select photos or files** or **Photo gallery** and sends one batch.
+4. Receiver uses **Save all to Photos** (iOS) or **Download all images** (PC).
 
-Received photos appear in the Android in-app gallery and can be saved to the device photo library. Photos sent to iPhone are saved manually from Safari.
+Received photos appear in the Android in-app gallery and can be saved to the device photo library. Photos sent to a receiver are saved from the browser on that device.
 
 ## Limitations
 
-- iPhone `/receive` requires Safari to stay open; background tabs may drop the WebSocket.
+- `/receive` requires the tab to stay open; background tabs may drop the WebSocket.
+- PC **Download all** triggers multiple browser downloads (settings may ask once per file).
 - No pairing or encryption; anyone with the gateway URL can connect (same as before).
 - HEIC images from Android may not preview correctly in all Safari versions; JPEG is most reliable.
 - Saving to Photos requires one Share sheet confirmation per batch (Safari security); it is not fully automatic.

@@ -600,7 +600,7 @@ app.get('/', (req, res) => {
       <h1>AirReceive Gateway</h1>
       <p class="tagline">Send photos to your Android device from any browser</p>
 
-      <a class="nav-link" href="/receive">Receive on iPhone / Safari &rarr;</a>
+      <a class="nav-link" href="/receive">Receive on iPhone / PC &rarr;</a>
 
       <div class="status-badge" id="statusBadge">
         <span class="dot"></span>
@@ -841,7 +841,7 @@ app.get('/receive', (req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>AirReceive — Receive on iPhone</title>
+  <title>AirReceive — Receive photos</title>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
   <style>
     :root {
@@ -935,29 +935,54 @@ app.get('/receive', (req, res) => {
       border-radius: 8px;
       background: #0d1117;
     }
-    .save-all-btn {
+    .action-buttons { margin-top: 4px; }
+    .save-all-btn, .download-all-btn {
       display: block;
       width: 100%;
       padding: 14px 20px;
       border-radius: 100px;
       border: none;
-      background: linear-gradient(135deg, #38bdf8, #0ea5e9);
-      color: #0d1117;
       font-weight: 700;
       font-size: 15px;
       text-align: center;
       box-sizing: border-box;
       cursor: pointer;
     }
-    .save-all-btn:disabled {
+    .save-all-btn {
+      background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+      color: #0d1117;
+    }
+    .download-all-btn {
+      margin-top: 10px;
+      background: transparent;
+      border: 1px solid var(--primary);
+      color: var(--primary);
+    }
+    .save-all-btn:disabled, .download-all-btn:disabled {
       opacity: 0.5;
       cursor: not-allowed;
+    }
+    .btn-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin: 6px 0 0;
+      line-height: 1.35;
+      text-align: center;
     }
     .save-hint {
       font-size: 11px;
       color: var(--text-muted);
       margin-top: 10px;
       line-height: 1.4;
+    }
+    .thumb-dl {
+      display: block;
+      margin-top: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--primary);
+      text-align: center;
+      text-decoration: none;
     }
     .toast-success {
       display: none;
@@ -1009,8 +1034,8 @@ app.get('/receive', (req, res) => {
   <div class="container">
     <div class="card">
       <a class="nav-link" href="/">&larr; Send to Android</a>
-      <h1>Receive on iPhone</h1>
-      <p class="tagline">Keep this page open in Safari while sending from your Android device</p>
+      <h1>Receive photos</h1>
+      <p class="tagline">Receive on iPhone, PC, or any browser — keep this tab open while sending from Android</p>
 
       <div class="status-badge" id="statusBadge">
         <span class="dot"></span>
@@ -1022,9 +1047,13 @@ app.get('/receive', (req, res) => {
       <div class="batch-wrap" id="batchWrap">
         <div class="batch-title" id="batchTitle">Received photos</div>
         <div class="thumb-grid" id="thumbGrid"></div>
-        <button type="button" class="save-all-btn" id="saveAllBtn" disabled>Save all to Photos</button>
-        <p class="save-hint">Tap the button, then on the Share sheet choose <strong>Save Images</strong> or <strong>Add to Photos</strong>. Use Safari for best results.</p>
-        <p class="save-hint" id="fallbackHint" style="display:none;">Or tap any thumbnail below to save that photo individually.</p>
+        <div class="action-buttons">
+          <button type="button" class="save-all-btn" id="saveAllBtn" disabled>Save all to Photos</button>
+          <p class="btn-subtitle">iPhone / iPad — opens Share sheet; choose <strong>Save Images</strong> or <strong>Add to Photos</strong> (Safari recommended)</p>
+          <button type="button" class="download-all-btn" id="downloadAllBtn" disabled>Download all images</button>
+          <p class="btn-subtitle">PC / Mac — saves each file to your Downloads folder (browser may ask once per file)</p>
+        </div>
+        <p class="save-hint" id="fallbackHint" style="display:none;">On iPhone, tap a thumbnail to save one photo at a time via Share.</p>
       </div>
 
       <div class="toast-success" id="successToast"></div>
@@ -1033,10 +1062,11 @@ app.get('/receive', (req, res) => {
       <div class="instructions">
         <strong>How to use</strong>
         <ol>
-          <li>Leave this Safari tab open in <strong>Safari</strong> (do not switch apps).</li>
-          <li>On Android AirReceive, set gateway URL to <code id="originCode"></code></li>
-          <li>Tap <strong>Send Photos to iPhone</strong> and select multiple images.</li>
-          <li>Tap <strong>Save all to Photos</strong>, then confirm on the iOS Share sheet.</li>
+          <li>Keep this tab open (Safari on iPhone, or Chrome / Edge / Firefox on PC).</li>
+          <li>On Android AirReceive, enable the gateway (free hosted or your URL): <code id="originCode"></code></li>
+          <li>On Android, tap <strong>Select photos or files</strong> and send up to 20 images.</li>
+          <li><strong>iPhone:</strong> tap <strong>Save all to Photos</strong> and confirm on the Share sheet.</li>
+          <li><strong>PC:</strong> tap <strong>Download all images</strong> and check your Downloads folder.</li>
         </ol>
       </div>
     </div>
@@ -1048,6 +1078,7 @@ app.get('/receive', (req, res) => {
     const batchTitle = document.getElementById('batchTitle');
     const thumbGrid = document.getElementById('thumbGrid');
     const saveAllBtn = document.getElementById('saveAllBtn');
+    const downloadAllBtn = document.getElementById('downloadAllBtn');
     const successToast = document.getElementById('successToast');
     const errorToast = document.getElementById('errorToast');
     const waitingText = document.getElementById('waitingText');
@@ -1085,6 +1116,14 @@ app.get('/receive', (req, res) => {
       errorToast.style.display = 'none';
       successToast.textContent = msg;
       successToast.style.display = 'block';
+    }
+
+    function isIOS() {
+      return /iPhone|iPad|iPod/i.test(navigator.userAgent);
+    }
+
+    function usePerThumbDownload() {
+      return !isIOS();
     }
 
     function mimeFromName(name) {
@@ -1158,7 +1197,39 @@ app.get('/receive', (req, res) => {
       }
     }
 
+    async function downloadAllImages() {
+      if (cachedBatchFiles.length === 0) {
+        showError('No photos loaded yet.');
+        return;
+      }
+      const count = cachedBatchFiles.length;
+      downloadAllBtn.disabled = true;
+      try {
+        for (let i = 0; i < cachedBatchFiles.length; i++) {
+          const entry = cachedBatchFiles[i];
+          const url = URL.createObjectURL(entry.blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = entry.name || ('photo-' + (i + 1) + '.jpg');
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+          if (i < cachedBatchFiles.length - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 300));
+          }
+        }
+        await cleanupBatch();
+        showSuccess('Downloaded ' + count + ' image(s). Check your Downloads folder.');
+        downloadAllBtn.textContent = 'Downloaded';
+      } catch (e) {
+        showError('Download failed: ' + (e.message || 'Unknown error'));
+        downloadAllBtn.disabled = false;
+      }
+    }
+
     saveAllBtn.addEventListener('click', saveAllToPhotos);
+    downloadAllBtn.addEventListener('click', downloadAllImages);
 
     function connect() {
       if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
@@ -1189,26 +1260,40 @@ app.get('/receive', (req, res) => {
 
             const wrap = document.createElement('div');
             wrap.className = 'thumb-item';
-            wrap.title = 'Tap to save this photo';
             const img = document.createElement('img');
             img.src = URL.createObjectURL(blob);
             img.alt = name;
             wrap.appendChild(img);
-            wrap.addEventListener('click', async () => {
-              try {
-                const ok = await shareOneFile({ name, blob, type });
-                if (ok) showSuccess('Use Save Images on the Share sheet for ' + name);
-                else showError('Share not supported. Try Safari.');
-              } catch (e) {
-                if (e.name !== 'AbortError') showError(e.message || 'Share failed');
-              }
-            });
+
+            if (usePerThumbDownload()) {
+              wrap.title = 'Download ' + name;
+              const dl = document.createElement('a');
+              dl.className = 'thumb-dl';
+              dl.textContent = 'Download';
+              dl.href = URL.createObjectURL(blob);
+              dl.download = name;
+              dl.addEventListener('click', (e) => e.stopPropagation());
+              wrap.appendChild(dl);
+            } else {
+              wrap.title = 'Tap to save this photo';
+              wrap.addEventListener('click', async () => {
+                try {
+                  const ok = await shareOneFile({ name, blob, type });
+                  if (ok) showSuccess('Use Save Images on the Share sheet for ' + name);
+                  else showError('Share not supported. Try Safari.');
+                } catch (e) {
+                  if (e.name !== 'AbortError') showError(e.message || 'Share failed');
+                }
+              });
+            }
             thumbGrid.appendChild(wrap);
           } catch (e) {
             console.warn('Thumbnail failed for', file.id, e);
           }
         }
-        saveAllBtn.disabled = cachedBatchFiles.length === 0;
+        const ready = cachedBatchFiles.length > 0;
+        saveAllBtn.disabled = !ready;
+        downloadAllBtn.disabled = !ready;
       }
 
       async function handleBatch(msg) {
@@ -1218,7 +1303,9 @@ app.get('/receive', (req, res) => {
         const count = msg.count || (msg.files && msg.files.length) || 0;
         batchTitle.textContent = count + ' photo' + (count === 1 ? '' : 's') + ' ready';
         saveAllBtn.textContent = 'Save all ' + count + ' photos to Photos';
+        downloadAllBtn.textContent = 'Download all ' + count + ' images';
         saveAllBtn.disabled = true;
+        downloadAllBtn.disabled = true;
         batchWrap.classList.add('visible');
         if (msg.files && msg.files.length) {
           await loadBatchThumbnails(msg.files);

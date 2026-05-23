@@ -26,6 +26,10 @@ import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.util.*
 
+enum class GatewaySelection {
+    NONE, HOSTED, CUSTOM
+}
+
 enum class TransferStatus {
     IN_PROGRESS, COMPLETED, FAILED
 }
@@ -44,7 +48,8 @@ data class ServerState(
     val ipAddress: String = "",
     val networkName: String = "Local Network",
     val activeTransfer: ActiveTransfer? = null,
-    val customUrl: String = ""
+    val customUrl: String = "",
+    val gatewaySelection: GatewaySelection = GatewaySelection.NONE
 )
 
 sealed interface ViewModelEvent {
@@ -54,6 +59,19 @@ sealed interface ViewModelEvent {
 }
 
 class AirReceiveViewModel(application: Application) : AndroidViewModel(application) {
+
+    companion object {
+        const val HOSTED_GATEWAY_URL = "https://airreceive-repo.onrender.com"
+
+        fun gatewaySelectionForUrl(url: String): GatewaySelection {
+            val normalized = url.trim().removeSuffix("/")
+            return when {
+                normalized.isEmpty() -> GatewaySelection.NONE
+                normalized.equals(HOSTED_GATEWAY_URL, ignoreCase = true) -> GatewaySelection.HOSTED
+                else -> GatewaySelection.CUSTOM
+            }
+        }
+    }
 
     private val repository: PhotoRepository
     val receivedPhotos: StateFlow<List<ReceivedPhoto>>
@@ -115,14 +133,23 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
             ""
         }
         
-        _serverState.update { 
+        _serverState.update {
             it.copy(
                 ipAddress = ip,
                 networkName = ssid,
                 serverUrl = url,
-                customUrl = savedCustomUrl
+                customUrl = savedCustomUrl,
+                gatewaySelection = gatewaySelectionForUrl(savedCustomUrl)
             )
         }
+    }
+
+    fun applyHostedGateway() {
+        setCustomUrl(HOSTED_GATEWAY_URL)
+    }
+
+    fun clearGateway() {
+        setCustomUrl("")
     }
 
     fun setCustomUrl(url: String) {
@@ -133,7 +160,10 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
             trimmed
         }.removeSuffix("/")
         val previous = prefs.getString("custom_url", "") ?: ""
-        prefs.edit().putString("custom_url", formatted).apply()
+        prefs.edit()
+            .putString("custom_url", formatted)
+            .putBoolean("gateway_use_hosted", formatted.equals(HOSTED_GATEWAY_URL, ignoreCase = true))
+            .apply()
         refreshNetworkInfo()
         // Reconnect WebSocket when the gateway URL changes (saving settings does not do this on its own).
         if (formatted != previous) {
