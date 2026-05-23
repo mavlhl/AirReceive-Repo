@@ -22,7 +22,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -39,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -51,6 +54,7 @@ import com.example.ui.viewmodel.ActiveTransfer
 import com.example.ui.viewmodel.AirReceiveViewModel
 import com.example.ui.viewmodel.GatewaySelection
 import com.example.ui.viewmodel.ServerState
+import com.example.ui.viewmodel.TransferDirection
 
 @Composable
 private fun CollapsibleSection(
@@ -196,7 +200,8 @@ fun SettingsScreen(
     onRefreshNetwork: () -> Unit,
     onApplyHostedGateway: () -> Unit,
     onClearGateway: () -> Unit,
-    onUpdateCustomUrl: (String) -> Unit
+    onUpdateCustomUrl: (String) -> Unit,
+    onOpenSupport: () -> Unit
 ) {
     val isLocalOnly = state.gatewaySelection == GatewaySelection.NONE
     var showCustomField by remember(state.gatewaySelection) {
@@ -242,6 +247,55 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp)
             )
+        }
+
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(onClick = onOpenSupport),
+            shape = RoundedCornerShape(28.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, Color(0xFFFBBF24).copy(alpha = 0.25f))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 16.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.weight(1f)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Favorite,
+                        contentDescription = null,
+                        tint = Color(0xFFFBBF24),
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Spacer(modifier = Modifier.size(12.dp))
+                    Column {
+                        Text(
+                            text = "Support Maverick",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = "Buy Me a Coffee — QR code",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                Icon(
+                    imageVector = Icons.Default.KeyboardArrowRight,
+                    contentDescription = "Open support",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(22.dp)
+                )
+            }
         }
 
         if (state.isRunning && state.serverUrl.isNotEmpty() && state.customUrl.isEmpty()) {
@@ -326,11 +380,11 @@ fun SettingsScreen(
         }
 
         AnimatedVisibility(
-            visible = state.activeTransfer != null,
+            visible = state.activeTransfer?.direction == TransferDirection.INBOUND,
             enter = fadeIn() + expandVertically(),
             exit = fadeOut() + shrinkVertically()
         ) {
-            state.activeTransfer?.let { transfer: ActiveTransfer ->
+            state.activeTransfer?.takeIf { it.direction == TransferDirection.INBOUND }?.let { transfer ->
                 ActiveTransferCard(transfer = transfer)
             }
         }

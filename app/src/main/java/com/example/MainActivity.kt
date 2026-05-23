@@ -65,6 +65,7 @@ import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.*
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.example.util.DonateLinks
 import com.example.util.GallerySaver
 import com.example.util.QrCodeGenerator
 import kotlinx.coroutines.flow.collectLatest
@@ -252,6 +253,14 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
                         }
                     },
                     label = { Text("Settings") }
+                )
+                NavigationBarItem(
+                    selected = currentRoute == AppRoute.Support,
+                    onClick = { navController.navigate(AppRoute.Support) { launchSingleTop = true } },
+                    icon = {
+                        Icon(Icons.Default.Favorite, contentDescription = "Support")
+                    },
+                    label = { Text("Support") }
                 )
             }
         },
@@ -649,6 +658,99 @@ fun SharePortalPanel(url: String) {
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
+            }
+        }
+    }
+}
+
+@Composable
+fun SupportMaverickPanel() {
+    val context = LocalContext.current
+    val bmcUrl = DonateLinks.BMC_URL
+    val qrCodeBitmap = remember(bmcUrl) {
+        QrCodeGenerator.generate(bmcUrl, 350)
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, Color(0xFFFBBF24).copy(alpha = 0.35f))
+    ) {
+        Column(
+            modifier = Modifier.padding(20.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "SUPPORT MAVERICK",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.2.sp,
+                color = Color(0xFFFBBF24),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Thank you for supporting Maverick! Your donation helps keep AirReceive updated and free to use.",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 18.sp,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Box(
+                modifier = Modifier
+                    .size(200.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(Color.White)
+                    .padding(12.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                if (qrCodeBitmap != null) {
+                    Image(
+                        bitmap = qrCodeBitmap.asImageBitmap(),
+                        contentDescription = "Buy Me a Coffee QR code",
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "QR generation failed",
+                        tint = Color.Gray
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Scan QR or tap the button below",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(
+                onClick = {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(bmcUrl))
+                    context.startActivity(intent)
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("btn_bmc_donate"),
+                shape = CircleShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFFFBBF24),
+                    contentColor = Color(0xFF0D1117)
+                )
+            ) {
+                Icon(
+                    imageVector = Icons.Default.Favorite,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Buy Me a Coffee", fontWeight = FontWeight.Bold, fontSize = 15.sp)
             }
         }
     }
@@ -1106,9 +1208,12 @@ fun ActiveTransferCard(transfer: ActiveTransfer) {
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
                             text = when {
+                                isDone && transfer.direction == TransferDirection.OUTBOUND -> "Send completed"
                                 isDone -> "Transfer finalized successfully"
+                                isFailed && transfer.direction == TransferDirection.OUTBOUND -> "Send failed"
                                 isFailed -> "Transfer error"
-                                else -> "Transferring..."
+                                transfer.direction == TransferDirection.OUTBOUND -> "Sending..."
+                                else -> "Receiving..."
                             },
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -1487,17 +1592,6 @@ fun FullscreenPhotoViewer(
     onSharePhoto: () -> Unit,
     onDeletePhoto: () -> Unit
 ) {
-    // #region agent log
-    LaunchedEffect(photo.id) {
-        com.example.util.DebugAgentLog.log(
-            location = "FullscreenPhotoViewer",
-            message = "viewer shown as root overlay",
-            hypothesisId = "H-viewer-dialog",
-            data = mapOf("photoId" to photo.id)
-        )
-    }
-    // #endregion
-
     Column(
         modifier = modifier
             .fillMaxSize()

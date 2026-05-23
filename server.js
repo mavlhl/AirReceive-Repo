@@ -235,6 +235,9 @@ setInterval(() => {
   }
 }, 60 * 1000);
 
+// Static assets (e.g. Buy Me a Coffee QR)
+app.use('/docs', express.static(path.join(__dirname, 'docs')));
+
 // List online registered devices
 app.get('/api/devices', (req, res) => {
   const role = req.query.role;
@@ -469,7 +472,8 @@ function gatewayNavHtml(activeNav) {
     { key: 'home', href: '/', label: 'Home' },
     { key: 'android', href: '/to-android', label: 'Send to Android' },
     { key: 'send', href: '/send', label: 'Send to device' },
-    { key: 'receive', href: '/receive', label: 'Receive' }
+    { key: 'receive', href: '/receive', label: 'Receive' },
+    { key: 'support', href: '/support', label: 'Support' }
   ];
   return '<nav class="gateway-nav">' + items.map((item) => {
     const cls = item.key === activeNav ? 'gateway-nav-link active' : 'gateway-nav-link';
@@ -588,6 +592,10 @@ app.get('/', (req, res) => {
         <strong>Receive files</strong>
         <span>Stay on this page to receive files sent from another device or Android.</span>
       </a>
+      <a class="hub-card" href="/support">
+        <strong>Support Maverick</strong>
+        <span>Thank you for supporting AirReceive — Buy Me a Coffee and QR code.</span>
+      </a>
       <p class="hub-status" id="hubStatus">Checking gateway status...</p>
     </div>
     <script>
@@ -599,6 +607,52 @@ app.get('/', (req, res) => {
         document.getElementById('hubStatus').textContent = 'Could not load status.';
       });
     </script>
+    `
+  }));
+});
+
+const BMC_URL = 'https://buymeacoffee.com/mavlhl';
+
+app.get('/support', (req, res) => {
+  res.send(gatewayPageHtml({
+    title: 'AirReceive — Support Maverick',
+    activeNav: 'support',
+    accent: '#fbbf24',
+    extraCss: `
+    .bmc-qr-wrap {
+      display: inline-block;
+      padding: 12px;
+      background: #fff;
+      border-radius: 16px;
+      margin: 16px 0;
+    }
+    .bmc-qr { display: block; width: 250px; height: 250px; }
+    .bmc-btn {
+      display: inline-block;
+      margin-top: 8px;
+      padding: 14px 28px;
+      border-radius: 100px;
+      background: #fbbf24;
+      color: #0d1117;
+      font-weight: 800;
+      font-size: 15px;
+      text-decoration: none;
+      transition: opacity 0.15s;
+    }
+    .bmc-btn:hover { opacity: 0.9; }
+    .bmc-note { font-size: 13px; color: var(--text-muted); margin-top: 12px; line-height: 1.5; }
+    `,
+    bodyHtml: `
+    <div class="card">
+      <h1>Thank you for supporting Maverick</h1>
+      <p class="tagline">Your support helps keep AirReceive updated and free to use.</p>
+      <p class="bmc-note">Scan the QR code with your phone camera, or tap the button to open Buy Me a Coffee in your browser.</p>
+      <div class="bmc-qr-wrap">
+        <img src="/docs/bmc-qr.png" alt="Buy Me a Coffee QR code" width="250" height="250" class="bmc-qr">
+      </div>
+      <br>
+      <a class="bmc-btn" href="${BMC_URL}" target="_blank" rel="noopener noreferrer">Buy Me a Coffee</a>
+    </div>
     `
   }));
 });

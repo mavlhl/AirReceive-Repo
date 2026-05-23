@@ -4,4 +4,5 @@ object AppRoute {
     const val Send = "send"
     const val Gallery = "gallery"
     const val Settings = "settings"
+    const val Support = "support"
 }

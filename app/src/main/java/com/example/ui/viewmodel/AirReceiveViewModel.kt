@@ -19,7 +19,6 @@ import com.example.server.AirReceiveGatewayClient
 import com.example.server.AirReceiveGatewaySender
 import com.example.server.AirReceiveLocalSender
 import com.example.server.GatewayReceiverDevice
-import com.example.util.DebugAgentLog
 import com.example.util.GallerySaver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -38,12 +37,18 @@ enum class TransferStatus {
     IN_PROGRESS, COMPLETED, FAILED
 }
 
+enum class TransferDirection {
+    INBOUND,
+    OUTBOUND
+}
+
 data class ActiveTransfer(
     val fileName: String,
     val progress: Float,
     val bytesRead: Long,
     val totalBytes: Long,
-    val status: TransferStatus
+    val status: TransferStatus,
+    val direction: TransferDirection = TransferDirection.INBOUND
 )
 
 data class ServerState(
@@ -164,14 +169,6 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         if (state.localSendTargetUrl.isNotEmpty()) return
         val portal = state.serverUrl.trim().removeSuffix("/")
         if (portal.startsWith("http://") && state.ipAddress.isNotEmpty()) {
-            // #region agent log
-            DebugAgentLog.log(
-                location = "AirReceiveViewModel.ensureLocalSendTargetDefault",
-                message = "defaulting local send target to device portal",
-                hypothesisId = "H-send-empty",
-                data = mapOf("portal" to portal, "ip" to state.ipAddress)
-            )
-            // #endregion
             prefs.edit().putString("local_send_target_url", portal).apply()
             _serverState.update { it.copy(localSendTargetUrl = portal) }
         }
@@ -203,18 +200,6 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
     fun sendPhotosToLocal(uris: List<Uri>) {
         ensureLocalSendTargetDefault()
         val targetUrl = _serverState.value.localSendTargetUrl.trim()
-        // #region agent log
-        DebugAgentLog.log(
-            location = "AirReceiveViewModel.sendPhotosToLocal",
-            message = "local send invoked",
-            hypothesisId = "H-send-blocked",
-            data = mapOf(
-                "targetUrl" to targetUrl,
-                "uriCount" to uris.size,
-                "ip" to _serverState.value.ipAddress
-            )
-        )
-        // #endregion
         if (targetUrl.isEmpty()) {
             viewModelScope.launch {
                 _eventFlow.emit(
@@ -255,7 +240,8 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
                                             progress = 0f,
                                             bytesRead = 0,
                                             totalBytes = size,
-                                            status = TransferStatus.IN_PROGRESS
+                                            status = TransferStatus.IN_PROGRESS,
+                                            direction = TransferDirection.OUTBOUND
                                         )
                                     )
                                 }
@@ -444,7 +430,8 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
                                 progress = 0f,
                                 bytesRead = 0,
                                 totalBytes = size,
-                                status = TransferStatus.IN_PROGRESS
+                                status = TransferStatus.IN_PROGRESS,
+                                direction = TransferDirection.INBOUND
                             )
                         )
                     }
@@ -682,7 +669,8 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
                                             progress = 0f,
                                             bytesRead = 0,
                                             totalBytes = size,
-                                            status = TransferStatus.IN_PROGRESS
+                                            status = TransferStatus.IN_PROGRESS,
+                                            direction = TransferDirection.OUTBOUND
                                         )
                                     )
                                 }

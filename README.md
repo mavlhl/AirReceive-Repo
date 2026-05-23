@@ -57,16 +57,18 @@ The app uses a bottom navigation bar:
 |-----|---------|
 | **Home** (gallery) | View received files; **Save all** or per-image **Save to Photos**; tap to preview |
 | **Send** | **Local Wi‑Fi:** send to another device’s portal URL; **Gateway:** pick online receiver |
-| **Settings** | Start/stop receiver; local mode shows compact QR help + optional gateway expander |
+| **Settings** | Start/stop receiver; local mode shows compact QR help + optional gateway expander; link to Support |
+| **Support** | Thank Maverick — Buy Me a Coffee button and QR code |
 
 ### Gateway URLs
 
 | URL | Purpose |
 |-----|---------|
-| `https://your-app.onrender.com/` | **Hub** — choose Send to Android, Send to device, or Receive |
+| `https://your-app.onrender.com/` | **Hub** — choose Send to Android, Send to device, Receive, or Support |
 | `https://your-app.onrender.com/to-android` | Send a photo **to a chosen Android phone** (device picker) |
 | `https://your-app.onrender.com/send` | Send files **to a chosen PC or phone** (device picker) |
 | `https://your-app.onrender.com/receive` | **Receive** files (keep the tab open; set a device name when prompted) |
+| `https://your-app.onrender.com/support` | **Support Maverick** — Buy Me a Coffee link and donation QR code |
 
 Uploads use `POST /upload` or `POST /upload/batch` with form field `target`: `phone` (to Android) or `receiver` (to `/receive`). Optional `targetDeviceId` sends only to one registered device (see `GET /api/devices`).
 

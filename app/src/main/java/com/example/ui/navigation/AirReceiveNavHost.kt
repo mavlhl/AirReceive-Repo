@@ -11,6 +11,7 @@ import com.example.data.ReceivedPhoto
 import com.example.ui.screens.GalleryScreen
 import com.example.ui.screens.SendScreen
 import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.SupportScreen
 import com.example.ui.viewmodel.AirReceiveViewModel
 import com.example.ui.viewmodel.ServerState
 
@@ -69,8 +70,12 @@ fun AirReceiveNavHost(
                 onUpdateCustomUrl = { url ->
                     viewModel.setCustomUrl(url)
                     Toast.makeText(context, "Custom gateway URL saved!", Toast.LENGTH_SHORT).show()
-                }
+                },
+                onOpenSupport = { navController.navigate(AppRoute.Support) { launchSingleTop = true } }
             )
+        }
+        composable(AppRoute.Support) {
+            SupportScreen()
         }
     }
 }
