@@ -2,7 +2,7 @@
 
 AirReceive is an Android app for cross-device photo transfer—similar to Apple’s AirDrop. It can **receive** photos on Android (from iPhone browsers or other devices) and **send** photos from Android to an iPhone via the public gateway. 
 
-Distinctive to existing file sharing services, you do not need to be on the same network between your files, even with people not in your district, the same country and even beyond the seas!
+Distinctive to existing file sharing services (like Send Anywhere and LocalSend), you do not need to be on the same network between your files, even with people not in your district, the same country and even beyond the seas!
 
 This repo contains two parts that work together:
 
@@ -21,6 +21,17 @@ You can donate a buck to support Maverick in continue updating this repo! https:
 ### Local Wi‑Fi mode (default)
 
 When your phone and the sender are on the same Wi‑Fi network, the app starts a small HTTP server on port `8080`. The sender opens a URL (shown in the app as a QR code or link) in a browser, picks photos, and uploads them directly to the phone. No cloud service is required.
+
+**Send on same Wi‑Fi (Android → Android or browser receiver):**
+
+1. On the **receiver**, open **Settings** → **Start Receiver** and note the portal URL (e.g. `http://192.168.1.10:8080`).
+2. On the **sender**, open the **Send** tab (with **Local Wi‑Fi only** in Settings), paste the receiver URL, tap the checkmark, then **Select photos or files**.
+3. Files upload to the receiver’s in-app gallery via `POST /upload` (raw body, same as the browser portal).
+
+**Save received images to Photos:**
+
+- In the **Home** gallery, tap **Save all** to copy every image to `Pictures/AirReceive`, or use the save icon on a grid card / **Save to Photos** in fullscreen preview.
+- Non-image files (PDF, etc.) can be shared from the app but are not written to the Photos library.
 
 ### Public gateway mode (optional)
 
@@ -44,9 +55,9 @@ The app uses a bottom navigation bar:
 
 | Tab | Purpose |
 |-----|---------|
-| **Home** (gallery) | Default screen — view, share, and save received photos |
-| **Send** | Pick an online receiver and send photos or files (gateway mode) |
-| **Settings** | Start/stop receiver, gateway URL, local Wi‑Fi QR, active transfers |
+| **Home** (gallery) | View received files; **Save all** or per-image **Save to Photos**; tap to preview |
+| **Send** | **Local Wi‑Fi:** send to another device’s portal URL; **Gateway:** pick online receiver |
+| **Settings** | Start/stop receiver; local mode shows compact QR help + optional gateway expander |
 
 ### Gateway URLs
 

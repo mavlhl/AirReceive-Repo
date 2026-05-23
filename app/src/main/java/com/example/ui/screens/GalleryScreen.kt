@@ -33,7 +33,6 @@ import com.example.data.ReceivedPhoto
 import com.example.sharePhotoFile
 import com.example.ui.viewmodel.AirReceiveViewModel
 import com.example.ui.viewmodel.ServerState
-import com.example.util.GallerySaver
 import java.io.File
 
 @Composable
@@ -45,6 +44,7 @@ fun GalleryScreen(
     viewModel: AirReceiveViewModel
 ) {
     val context = LocalContext.current
+    val hasImages = photoList.any { it.isImage }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -84,18 +84,31 @@ fun GalleryScreen(
                 }
 
                 if (photoList.isNotEmpty()) {
-                    Text(
-                        text = "Clear All",
-                        color = MaterialTheme.colorScheme.error,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier
-                            .testTag("btn_clear_all")
-                            .clickable {
-                                viewModel.clearAllPhotos()
-                                Toast.makeText(context, "Gallery cleared", Toast.LENGTH_SHORT).show()
-                            }
-                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        if (hasImages) {
+                            Text(
+                                text = "Save all",
+                                color = MaterialTheme.colorScheme.primary,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier
+                                    .testTag("btn_save_all_photos")
+                                    .clickable { viewModel.saveAllImagesToGallery() }
+                            )
+                        }
+                        Text(
+                            text = "Clear All",
+                            color = MaterialTheme.colorScheme.error,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier
+                                .testTag("btn_clear_all")
+                                .clickable {
+                                    viewModel.clearAllPhotos()
+                                    Toast.makeText(context, "Gallery cleared", Toast.LENGTH_SHORT).show()
+                                }
+                        )
+                    }
                 }
             }
 
@@ -106,6 +119,7 @@ fun GalleryScreen(
                     photos = photoList,
                     onPhotoClick = { onPhotoSelected(it) },
                     onShareClick = { sharePhotoFile(context, File(it.filePath), it.mimeType) },
+                    onSaveClick = { viewModel.savePhotoToGallery(it) },
                     onDeleteClick = { viewModel.deletePhoto(it) }
                 )
             }
@@ -116,17 +130,10 @@ fun GalleryScreen(
                 photo = photo,
                 onDismiss = { onPhotoSelected(null) },
                 onSaveToDisk = {
-                    val file = File(photo.filePath)
-                    val ok = GallerySaver.saveToPublicGallery(
-                        context = context,
-                        file = file,
-                        fileName = photo.fileName,
-                        mimeType = photo.mimeType
-                    )
-                    if (ok) {
-                        Toast.makeText(context, "Saved to device Photo Album successfully", Toast.LENGTH_LONG).show()
+                    if (photo.isImage) {
+                        viewModel.savePhotoToGallery(photo)
                     } else {
-                        Toast.makeText(context, "Failed to export photo", Toast.LENGTH_SHORT).show()
+                        Toast.makeText(context, "Only images can be saved to Photos.", Toast.LENGTH_SHORT).show()
                     }
                 },
                 onSharePhoto = { sharePhotoFile(context, File(photo.filePath), photo.mimeType) },

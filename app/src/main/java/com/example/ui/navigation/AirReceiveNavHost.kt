@@ -45,7 +45,8 @@ fun AirReceiveNavHost(
                 serverState = serverState,
                 viewModel = viewModel,
                 onOpenSettings = { navController.navigate(AppRoute.Settings) },
-                onSendPhotos = { viewModel.sendPhotosToGateway(it) }
+                onSendPhotosGateway = { viewModel.sendPhotosToGateway(it) },
+                onSendPhotosLocal = { viewModel.sendPhotosToLocal(it) }
             )
         }
         composable(AppRoute.Settings) {
@@ -69,8 +70,7 @@ fun AirReceiveNavHost(
                 onUpdateCustomUrl = { url ->
                     viewModel.setCustomUrl(url)
                     Toast.makeText(context, "Custom gateway URL saved!", Toast.LENGTH_SHORT).show()
-                },
-                onOpenSendTab = { navController.navigate(AppRoute.Send) }
+                }
             )
         }
     }

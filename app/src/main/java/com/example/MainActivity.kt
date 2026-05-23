@@ -109,9 +109,14 @@ class MainActivity : ComponentActivity() {
                             playAirDropChime()
                             triggerSuccessVibration()
                             val n = event.photoCount
+                            showToast("Sent $n file${if (n == 1) "" else "s"} successfully.")
+                        }
+                        is ViewModelEvent.SaveGalleryResult -> {
+                            if (event.saved > 0) {
+                                playAirDropChime()
+                            }
                             showToast(
-                                "Sent $n photo${if (n == 1) "" else "s"} to iPhone. " +
-                                    "Tap Save all to Photos on the receive page (Safari)."
+                                "Saved ${event.saved} of ${event.total} photo${if (event.total == 1) "" else "s"} to Pictures/AirReceive"
                             )
                         }
                         is ViewModelEvent.Error -> {
@@ -512,7 +517,7 @@ fun SharePortalPanel(url: String) {
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "HOW TO SEND FROM APPLE IPHONE",
+                text = "SHARE THIS LINK OR QR",
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.2.sp,
@@ -657,6 +662,138 @@ fun SendToIphoneSetupCard(onOpenSettings: () -> Unit = {}) {
             Spacer(modifier = Modifier.height(10.dp))
             TextButton(onClick = onOpenSettings) {
                 Text("Open Settings", color = Color(0xFF38BDF8), fontWeight = FontWeight.SemiBold)
+            }
+        }
+    }
+}
+
+@Composable
+fun LocalWifiSendPanel(
+    targetUrl: String,
+    onTargetUrlChange: (String) -> Unit,
+    onSaveTargetUrl: () -> Unit,
+    onSendPhotos: (List<Uri>) -> Unit
+) {
+    var inputUrl by remember(targetUrl) { mutableStateOf(targetUrl) }
+    val maxBatch = com.example.server.AirReceiveLocalSender.MAX_BATCH_FILES
+    val canSend = targetUrl.isNotBlank()
+
+    val pickFilesLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) onSendPhotos(uris.take(maxBatch))
+    }
+    val pickImagesLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = maxBatch)
+    ) { uris ->
+        if (uris.isNotEmpty()) onSendPhotos(uris)
+    }
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(28.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.35f))
+    ) {
+        Column(modifier = Modifier.padding(20.dp)) {
+            Text(
+                text = "SEND ON SAME WI-FI",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                letterSpacing = 1.2.sp,
+                color = Color(0xFF10B981),
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "1. On the receiver device, open Settings and tap Start Receiver.\n2. Copy their portal URL (e.g. http://192.168.1.10:8080) and paste it below.",
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                lineHeight = 18.sp,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            OutlinedTextField(
+                value = inputUrl,
+                onValueChange = { inputUrl = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Receiver portal URL") },
+                placeholder = { Text("http://192.168.1.10:8080", fontSize = 13.sp) },
+                singleLine = true,
+                textStyle = androidx.compose.ui.text.TextStyle(
+                    fontSize = 13.sp,
+                    fontFamily = FontFamily.Monospace
+                ),
+                trailingIcon = {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (inputUrl.isNotEmpty()) {
+                            IconButton(onClick = { inputUrl = "" }) {
+                                Icon(Icons.Default.Clear, contentDescription = "Clear", modifier = Modifier.size(18.dp))
+                            }
+                        }
+                        IconButton(onClick = {
+                            onTargetUrlChange(inputUrl.trim())
+                            onSaveTargetUrl()
+                        }) {
+                            Icon(
+                                Icons.Default.Check,
+                                contentDescription = "Save URL",
+                                tint = Color(0xFF10B981),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                }
+            )
+
+            if (targetUrl.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = "Saved: $targetUrl",
+                    fontSize = 11.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = Color(0xFF10B981),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            Button(
+                onClick = { pickFilesLauncher.launch(arrayOf("*/*")) },
+                enabled = canSend,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("btn_send_local"),
+                shape = CircleShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF10B981),
+                    contentColor = Color(0xFF0D1117),
+                    disabledContainerColor = Color(0xFF10B981).copy(alpha = 0.35f),
+                    disabledContentColor = Color(0xFF0D1117).copy(alpha = 0.5f)
+                )
+            ) {
+                Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Select photos or files", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = {
+                    pickImagesLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                enabled = canSend,
+                modifier = Modifier.fillMaxWidth(),
+                shape = CircleShape,
+                border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.5f))
+            ) {
+                Text("Photo gallery", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
             }
         }
     }
@@ -1145,6 +1282,7 @@ fun GalleryGridView(
     photos: List<ReceivedPhoto>,
     onPhotoClick: (ReceivedPhoto) -> Unit,
     onShareClick: (ReceivedPhoto) -> Unit,
+    onSaveClick: (ReceivedPhoto) -> Unit,
     onDeleteClick: (ReceivedPhoto) -> Unit
 ) {
     // Jetpack Compose 2-column Grid layout matching standard layouts
@@ -1163,6 +1301,7 @@ fun GalleryGridView(
                 photo = photo,
                 onClick = { onPhotoClick(photo) },
                 onShare = { onShareClick(photo) },
+                onSaveToGallery = { onSaveClick(photo) },
                 onDelete = { onDeleteClick(photo) }
             )
         }
@@ -1174,6 +1313,7 @@ fun PhotoCard(
     photo: ReceivedPhoto,
     onClick: () -> Unit,
     onShare: () -> Unit,
+    onSaveToGallery: () -> Unit,
     onDelete: () -> Unit
 ) {
     Card(
@@ -1245,6 +1385,23 @@ fun PhotoCard(
                     .padding(6.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                if (photo.isImage) {
+                    IconButton(
+                        onClick = onSaveToGallery,
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(Color.Black.copy(alpha = 0.6f))
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Done,
+                            contentDescription = "Save to Photos",
+                            tint = Color(0xFF10B981),
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+                }
+
                 IconButton(
                     onClick = onShare,
                     modifier = Modifier
@@ -1287,39 +1444,35 @@ fun FullscreenPhotoViewer(
     onSharePhoto: () -> Unit,
     onDeletePhoto: () -> Unit
 ) {
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(
+    val dialogProperties = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        DialogProperties(
             usePlatformDefaultWidth = false,
             dismissOnBackPress = true,
-            dismissOnClickOutside = true
+            dismissOnClickOutside = false,
+            decorFitsSystemWindows = false
         )
+    } else {
+        DialogProperties(
+            usePlatformDefaultWidth = false,
+            dismissOnBackPress = true,
+            dismissOnClickOutside = false
+        )
+    }
+
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = dialogProperties
     ) {
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.Black)
+                .systemBarsPadding()
         ) {
-            // Main Image Zoomable Canvas
-            AsyncImage(
-                model = photo.filePath,
-                contentDescription = photo.fileName,
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) { onDismiss() }
-            )
-
-            // Dynamic Header Info bar overlay
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .statusBarsPadding()
-                    .padding(16.dp)
-                    .align(Alignment.TopCenter),
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1338,6 +1491,7 @@ fun FullscreenPhotoViewer(
                 }
 
                 Column(
+                    modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
                     horizontalAlignment = Alignment.End
                 ) {
                     Text(
@@ -1356,53 +1510,71 @@ fun FullscreenPhotoViewer(
                 }
             }
 
-            // Bottom action tray buttons overlay
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp)
+            ) {
+                AsyncImage(
+                    model = photo.filePath,
+                    contentDescription = photo.fileName,
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .navigationBarsPadding()
-                    .padding(24.dp)
-                    .align(Alignment.BottomCenter),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Button(
-                    onClick = onSaveToDisk,
-                    modifier = Modifier
-                        .weight(1.2f)
-                        .height(50.dp)
-                        .testTag("btn_export_photo"),
-                    shape = CircleShape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = MaterialTheme.colorScheme.onPrimary
-                    )
-                ) {
-                    Icon(imageVector = Icons.Default.Done, contentDescription = null)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(text = "Save", fontWeight = FontWeight.Bold)
+                if (photo.isImage) {
+                    Button(
+                        onClick = onSaveToDisk,
+                        modifier = Modifier
+                            .weight(1.2f)
+                            .height(48.dp)
+                            .testTag("btn_export_photo"),
+                        shape = CircleShape,
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary,
+                            contentColor = MaterialTheme.colorScheme.onPrimary
+                        )
+                    ) {
+                        Icon(imageVector = Icons.Default.Done, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(text = "Save to Photos", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                    }
                 }
 
                 Button(
                     onClick = onSharePhoto,
                     modifier = Modifier
                         .weight(1f)
-                        .height(50.dp),
+                        .height(48.dp),
                     shape = CircleShape,
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.surfaceVariant,
                         contentColor = MaterialTheme.colorScheme.onSurface
                     )
                 ) {
-                    Icon(imageVector = Icons.Default.Share, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(text = "Share", fontWeight = FontWeight.Bold)
+                    Icon(
+                        imageVector = Icons.Default.Share,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(text = "Share", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                 }
 
                 IconButton(
                     onClick = onDeletePhoto,
                     modifier = Modifier
-                        .size(50.dp)
+                        .size(48.dp)
                         .clip(CircleShape)
                         .background(Color(0xFF7F1D1D).copy(alpha = 0.5f))
                         .border(1.dp, Color(0xFFEF4444), CircleShape)

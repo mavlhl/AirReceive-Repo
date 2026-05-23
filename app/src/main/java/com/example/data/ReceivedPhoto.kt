@@ -13,4 +13,7 @@ data class ReceivedPhoto(
     val timestamp: Long = System.currentTimeMillis(),
     val senderIp: String = "Unknown iOS Device",
     val mimeType: String = "image/jpeg"
-)
+) {
+    val isImage: Boolean
+        get() = mimeType.startsWith("image/", ignoreCase = true)
+}

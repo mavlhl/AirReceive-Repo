@@ -17,7 +17,9 @@ import com.example.data.ReceivedPhoto
 import com.example.server.AirReceiveServer
 import com.example.server.AirReceiveGatewayClient
 import com.example.server.AirReceiveGatewaySender
+import com.example.server.AirReceiveLocalSender
 import com.example.server.GatewayReceiverDevice
+import com.example.util.GallerySaver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -52,12 +54,14 @@ data class ServerState(
     val customUrl: String = "",
     val gatewaySelection: GatewaySelection = GatewaySelection.NONE,
     val onlineReceivers: List<GatewayReceiverDevice> = emptyList(),
-    val selectedReceiverId: String? = null
+    val selectedReceiverId: String? = null,
+    val localSendTargetUrl: String = ""
 )
 
 sealed interface ViewModelEvent {
     object TransferSuccess : ViewModelEvent
     data class SendSuccess(val photoCount: Int) : ViewModelEvent
+    data class SaveGalleryResult(val saved: Int, val total: Int) : ViewModelEvent
     class Error(val message: String) : ViewModelEvent
 }
 
@@ -132,6 +136,7 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         val ssid = getWifiSSID()
         val port = 8080
         val savedCustomUrl = prefs.getString("custom_url", "") ?: ""
+        val savedLocalTarget = prefs.getString("local_send_target_url", "") ?: ""
         val url = if (savedCustomUrl.isNotEmpty()) {
             savedCustomUrl
         } else if (ip.isNotEmpty()) {
@@ -146,8 +151,207 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
                 networkName = ssid,
                 serverUrl = url,
                 customUrl = savedCustomUrl,
-                gatewaySelection = gatewaySelectionForUrl(savedCustomUrl)
+                gatewaySelection = gatewaySelectionForUrl(savedCustomUrl),
+                localSendTargetUrl = savedLocalTarget
             )
+        }
+    }
+
+    fun updateLocalSendTarget(url: String) {
+        val trimmed = url.trim().removeSuffix("/")
+        if (trimmed.isNotEmpty()) {
+            val lower = trimmed.lowercase()
+            if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
+                viewModelScope.launch {
+                    _eventFlow.emit(ViewModelEvent.Error("Target URL must start with http:// or https://"))
+                }
+                return
+            }
+            try {
+                android.net.Uri.parse(trimmed).host ?: throw IllegalArgumentException()
+            } catch (_: Exception) {
+                viewModelScope.launch {
+                    _eventFlow.emit(ViewModelEvent.Error("Invalid target URL. Example: http://192.168.1.10:8080"))
+                }
+                return
+            }
+        }
+        prefs.edit().putString("local_send_target_url", trimmed).apply()
+        _serverState.update { it.copy(localSendTargetUrl = trimmed) }
+    }
+
+    fun sendPhotosToLocal(uris: List<Uri>) {
+        val targetUrl = _serverState.value.localSendTargetUrl.trim()
+        if (targetUrl.isEmpty()) {
+            viewModelScope.launch {
+                _eventFlow.emit(
+                    ViewModelEvent.Error("Enter the receiver's portal URL (from their Settings tab).")
+                )
+            }
+            return
+        }
+        if (_serverState.value.ipAddress.isEmpty()) {
+            viewModelScope.launch {
+                _eventFlow.emit(ViewModelEvent.Error("Connect to Wi-Fi to send on the local network."))
+            }
+            return
+        }
+        if (uris.isEmpty()) return
+        if (uris.size > AirReceiveLocalSender.MAX_BATCH_FILES) {
+            viewModelScope.launch {
+                _eventFlow.emit(
+                    ViewModelEvent.Error("Maximum ${AirReceiveLocalSender.MAX_BATCH_FILES} files per batch.")
+                )
+            }
+            return
+        }
+
+        viewModelScope.launch {
+            acquireLocks()
+            try {
+                val sender = AirReceiveLocalSender(getApplication(), targetUrl)
+                withContext(Dispatchers.IO) {
+                    sender.uploadBatch(
+                        uris = uris,
+                        onTransferStarted = { label, size ->
+                            runOnMain {
+                                _serverState.update {
+                                    it.copy(
+                                        activeTransfer = ActiveTransfer(
+                                            fileName = label,
+                                            progress = 0f,
+                                            bytesRead = 0,
+                                            totalBytes = size,
+                                            status = TransferStatus.IN_PROGRESS
+                                        )
+                                    )
+                                }
+                            }
+                        },
+                        onTransferProgress = { read, total ->
+                            val now = SystemClock.elapsedRealtime()
+                            if (read < total && now - lastSendProgressMs < 80) return@uploadBatch
+                            lastSendProgressMs = now
+                            runOnMain {
+                                _serverState.update {
+                                    val current = it.activeTransfer ?: return@update it
+                                    val percentage =
+                                        if (total > 0) read.toFloat() / total.toFloat() else 0f
+                                    it.copy(
+                                        activeTransfer = current.copy(
+                                            progress = percentage,
+                                            bytesRead = read,
+                                            totalBytes = total
+                                        )
+                                    )
+                                }
+                            }
+                        },
+                        onTransferCompleted = { count ->
+                            runOnMain {
+                                _serverState.update {
+                                    val current = it.activeTransfer
+                                    if (current != null) {
+                                        it.copy(
+                                            activeTransfer = current.copy(
+                                                progress = 1f,
+                                                status = TransferStatus.COMPLETED
+                                            )
+                                        )
+                                    } else it
+                                }
+                            }
+                            viewModelScope.launch {
+                                _eventFlow.emit(ViewModelEvent.SendSuccess(count))
+                                kotlinx.coroutines.delay(2500)
+                                runOnMain {
+                                    _serverState.update {
+                                        if (it.activeTransfer?.status == TransferStatus.COMPLETED) {
+                                            it.copy(activeTransfer = null)
+                                        } else it
+                                    }
+                                }
+                            }
+                        },
+                        onTransferFailed = { error ->
+                            runOnMain {
+                                _serverState.update {
+                                    val current = it.activeTransfer
+                                    if (current != null) {
+                                        it.copy(
+                                            activeTransfer = current.copy(
+                                                status = TransferStatus.FAILED
+                                            )
+                                        )
+                                    } else it
+                                }
+                            }
+                            viewModelScope.launch {
+                                _eventFlow.emit(ViewModelEvent.Error("Send failed: $error"))
+                                kotlinx.coroutines.delay(4000)
+                                runOnMain {
+                                    _serverState.update {
+                                        if (it.activeTransfer?.status == TransferStatus.FAILED) {
+                                            it.copy(activeTransfer = null)
+                                        } else it
+                                    }
+                                }
+                            }
+                        }
+                    )
+                }
+            } finally {
+                releaseLocks()
+            }
+        }
+    }
+
+    fun savePhotoToGallery(photo: ReceivedPhoto) {
+        if (!photo.isImage) {
+            viewModelScope.launch {
+                _eventFlow.emit(ViewModelEvent.Error("Only images can be saved to Photos."))
+            }
+            return
+        }
+        viewModelScope.launch(Dispatchers.IO) {
+            val file = File(photo.filePath)
+            val ok = GallerySaver.saveToPublicGallery(
+                context = getApplication(),
+                file = file,
+                fileName = photo.fileName,
+                mimeType = photo.mimeType
+            )
+            if (ok) {
+                _eventFlow.emit(ViewModelEvent.SaveGalleryResult(1, 1))
+            } else {
+                _eventFlow.emit(ViewModelEvent.Error("Failed to save ${photo.fileName} to Photos."))
+            }
+        }
+    }
+
+    fun saveAllImagesToGallery() {
+        viewModelScope.launch {
+            val images = receivedPhotos.value.filter { it.isImage }
+            if (images.isEmpty()) {
+                _eventFlow.emit(ViewModelEvent.Error("No images to save."))
+                return@launch
+            }
+            var saved = 0
+            withContext(Dispatchers.IO) {
+                for (photo in images) {
+                    val file = File(photo.filePath)
+                    if (file.exists() && GallerySaver.saveToPublicGallery(
+                            context = getApplication(),
+                            file = file,
+                            fileName = photo.fileName,
+                            mimeType = photo.mimeType
+                        )
+                    ) {
+                        saved++
+                    }
+                }
+            }
+            _eventFlow.emit(ViewModelEvent.SaveGalleryResult(saved, images.size))
         }
     }
 
