@@ -2,8 +2,6 @@
 
 AirReceive is an Android app for cross-device photo transfer—similar to Apple’s AirDrop. It can **receive** photos on Android (from iPhone browsers or other devices) and **send** photos from Android to an iPhone via the public gateway.
 
-This repository was originally scaffolded from [Google AI Studio](https://ai.studio); the README and project focus are now on **AirReceive** itself (photo transfer), not the generic AI Studio deploy template. The AI Studio banner and boilerplate instructions have been removed from this file.
-
 This repo contains two parts that work together:
 
 | Component | Role |
