@@ -19,6 +19,7 @@ import com.example.server.AirReceiveGatewayClient
 import com.example.server.AirReceiveGatewaySender
 import com.example.server.AirReceiveLocalSender
 import com.example.server.GatewayReceiverDevice
+import com.example.util.DebugAgentLog
 import com.example.util.GallerySaver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -157,6 +158,25 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    fun ensureLocalSendTargetDefault() {
+        val state = _serverState.value
+        if (state.customUrl.isNotEmpty()) return
+        if (state.localSendTargetUrl.isNotEmpty()) return
+        val portal = state.serverUrl.trim().removeSuffix("/")
+        if (portal.startsWith("http://") && state.ipAddress.isNotEmpty()) {
+            // #region agent log
+            DebugAgentLog.log(
+                location = "AirReceiveViewModel.ensureLocalSendTargetDefault",
+                message = "defaulting local send target to device portal",
+                hypothesisId = "H-send-empty",
+                data = mapOf("portal" to portal, "ip" to state.ipAddress)
+            )
+            // #endregion
+            prefs.edit().putString("local_send_target_url", portal).apply()
+            _serverState.update { it.copy(localSendTargetUrl = portal) }
+        }
+    }
+
     fun updateLocalSendTarget(url: String) {
         val trimmed = url.trim().removeSuffix("/")
         if (trimmed.isNotEmpty()) {
@@ -181,7 +201,20 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun sendPhotosToLocal(uris: List<Uri>) {
+        ensureLocalSendTargetDefault()
         val targetUrl = _serverState.value.localSendTargetUrl.trim()
+        // #region agent log
+        DebugAgentLog.log(
+            location = "AirReceiveViewModel.sendPhotosToLocal",
+            message = "local send invoked",
+            hypothesisId = "H-send-blocked",
+            data = mapOf(
+                "targetUrl" to targetUrl,
+                "uriCount" to uris.size,
+                "ip" to _serverState.value.ipAddress
+            )
+        )
+        // #endregion
         if (targetUrl.isEmpty()) {
             viewModelScope.launch {
                 _eventFlow.emit(

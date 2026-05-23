@@ -51,8 +51,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.zIndex
 import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -179,6 +178,7 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
     val needsGatewaySetup = serverState.customUrl.isEmpty()
     val showReceiverHint = !serverState.isRunning
 
+    Box(modifier = Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
@@ -268,6 +268,30 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
             selectedPhotoForView = selectedPhotoForView,
             onPhotoSelected = { selectedPhotoForView = it }
         )
+    }
+
+    selectedPhotoForView?.let { photo ->
+        FullscreenPhotoViewer(
+            modifier = Modifier
+                .fillMaxSize()
+                .zIndex(100f),
+            photo = photo,
+            onDismiss = { selectedPhotoForView = null },
+            onSaveToDisk = {
+                if (photo.isImage) {
+                    viewModel.savePhotoToGallery(photo)
+                } else {
+                    Toast.makeText(context, "Only images can be saved to Photos.", Toast.LENGTH_SHORT).show()
+                }
+            },
+            onSharePhoto = { sharePhotoFile(context, File(photo.filePath), photo.mimeType) },
+            onDeletePhoto = {
+                viewModel.deletePhoto(photo)
+                selectedPhotoForView = null
+                Toast.makeText(context, "Photo deleted", Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
     }
 }
 
@@ -670,23 +694,41 @@ fun SendToIphoneSetupCard(onOpenSettings: () -> Unit = {}) {
 @Composable
 fun LocalWifiSendPanel(
     targetUrl: String,
+    defaultPortalUrl: String,
     onTargetUrlChange: (String) -> Unit,
     onSaveTargetUrl: () -> Unit,
     onSendPhotos: (List<Uri>) -> Unit
 ) {
     var inputUrl by remember(targetUrl) { mutableStateOf(targetUrl) }
     val maxBatch = com.example.server.AirReceiveLocalSender.MAX_BATCH_FILES
-    val canSend = targetUrl.isNotBlank()
+
+    LaunchedEffect(defaultPortalUrl, targetUrl) {
+        if (targetUrl.isEmpty() && defaultPortalUrl.isNotEmpty()) {
+            inputUrl = defaultPortalUrl
+            onTargetUrlChange(defaultPortalUrl)
+        }
+    }
+
+    fun effectiveTarget(): String = inputUrl.trim().ifEmpty { targetUrl.trim() }
+    fun commitAndSend(uris: List<Uri>) {
+        val effective = effectiveTarget()
+        if (effective.isNotEmpty() && effective != targetUrl) {
+            onTargetUrlChange(effective)
+        }
+        onSendPhotos(uris)
+    }
+
+    val canSend = effectiveTarget().isNotBlank()
 
     val pickFilesLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
-        if (uris.isNotEmpty()) onSendPhotos(uris.take(maxBatch))
+        if (uris.isNotEmpty()) commitAndSend(uris.take(maxBatch))
     }
     val pickImagesLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = maxBatch)
     ) { uris ->
-        if (uris.isNotEmpty()) onSendPhotos(uris)
+        if (uris.isNotEmpty()) commitAndSend(uris)
     }
 
     Card(
@@ -706,7 +748,7 @@ fun LocalWifiSendPanel(
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "1. On the receiver device, open Settings and tap Start Receiver.\n2. Copy their portal URL (e.g. http://192.168.1.10:8080) and paste it below.",
+                text = "Receiver URL defaults to this phone's portal. Change it to the other device's URL (from their Settings) to send to them.",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 lineHeight = 18.sp,
@@ -1438,37 +1480,30 @@ fun PhotoCard(
 
 @Composable
 fun FullscreenPhotoViewer(
+    modifier: Modifier = Modifier,
     photo: ReceivedPhoto,
     onDismiss: () -> Unit,
     onSaveToDisk: () -> Unit,
     onSharePhoto: () -> Unit,
     onDeletePhoto: () -> Unit
 ) {
-    val dialogProperties = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-        DialogProperties(
-            usePlatformDefaultWidth = false,
-            dismissOnBackPress = true,
-            dismissOnClickOutside = false,
-            decorFitsSystemWindows = false
-        )
-    } else {
-        DialogProperties(
-            usePlatformDefaultWidth = false,
-            dismissOnBackPress = true,
-            dismissOnClickOutside = false
+    // #region agent log
+    LaunchedEffect(photo.id) {
+        com.example.util.DebugAgentLog.log(
+            location = "FullscreenPhotoViewer",
+            message = "viewer shown as root overlay",
+            hypothesisId = "H-viewer-dialog",
+            data = mapOf("photoId" to photo.id)
         )
     }
+    // #endregion
 
-    Dialog(
-        onDismissRequest = onDismiss,
-        properties = dialogProperties
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            .systemBarsPadding()
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black)
-                .systemBarsPadding()
-        ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1527,7 +1562,8 @@ fun FullscreenPhotoViewer(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .navigationBarsPadding()
+                    .padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1535,7 +1571,7 @@ fun FullscreenPhotoViewer(
                     Button(
                         onClick = onSaveToDisk,
                         modifier = Modifier
-                            .weight(1.2f)
+                            .weight(1f)
                             .height(48.dp)
                             .testTag("btn_export_photo"),
                         shape = CircleShape,
@@ -1587,7 +1623,6 @@ fun FullscreenPhotoViewer(
                 }
             }
         }
-    }
 }
 
 // Global share utility triggered on main actions

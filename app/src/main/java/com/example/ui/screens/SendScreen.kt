@@ -54,8 +54,12 @@ fun SendScreen(
                 )
             }
             serverState.ipAddress.isNotEmpty() -> {
+                androidx.compose.runtime.LaunchedEffect(serverState.serverUrl) {
+                    viewModel.ensureLocalSendTargetDefault()
+                }
                 LocalWifiSendPanel(
                     targetUrl = serverState.localSendTargetUrl,
+                    defaultPortalUrl = serverState.serverUrl.removeSuffix("/"),
                     onTargetUrlChange = { viewModel.updateLocalSendTarget(it) },
                     onSaveTargetUrl = { },
                     onSendPhotos = onSendPhotosLocal

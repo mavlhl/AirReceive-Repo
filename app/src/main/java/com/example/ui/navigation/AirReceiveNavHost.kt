@@ -35,8 +35,7 @@ fun AirReceiveNavHost(
             GalleryScreen(
                 serverState = serverState,
                 photoList = photoList,
-                selectedPhotoForView = selectedPhotoForView,
-                onPhotoSelected = onPhotoSelected,
+                onPhotoSelected = { onPhotoSelected(it) },
                 viewModel = viewModel
             )
         }
