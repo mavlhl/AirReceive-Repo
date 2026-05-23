@@ -41,7 +41,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import com.example.ui.theme.MacGlassBorder
+import com.example.ui.theme.MacGlassFill
+import com.example.ui.theme.MacShapeMedium
+import com.example.ui.theme.MacSpace2
+import com.example.ui.theme.MacSystemOrange
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -66,11 +70,11 @@ private fun CollapsibleSection(
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+        shape = MacShapeMedium,
+        colors = CardDefaults.cardColors(containerColor = MacGlassFill),
+        border = BorderStroke(1.dp, MacGlassBorder),
     ) {
-        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 14.dp)) {
+        Column(modifier = Modifier.padding(horizontal = MacSpace2, vertical = 14.dp)) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -253,9 +257,9 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable(onClick = onOpenSupport),
-            shape = RoundedCornerShape(28.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            border = BorderStroke(1.dp, Color(0xFFFBBF24).copy(alpha = 0.25f))
+            shape = MacShapeMedium,
+            colors = CardDefaults.cardColors(containerColor = MacGlassFill),
+            border = BorderStroke(1.dp, MacSystemOrange.copy(alpha = 0.25f))
         ) {
             Row(
                 modifier = Modifier
@@ -271,7 +275,7 @@ fun SettingsScreen(
                     Icon(
                         imageVector = Icons.Default.Favorite,
                         contentDescription = null,
-                        tint = Color(0xFFFBBF24),
+                        tint = MacSystemOrange,
                         modifier = Modifier.size(22.dp)
                     )
                     Spacer(modifier = Modifier.size(12.dp))
@@ -340,9 +344,9 @@ fun SettingsScreen(
         } else {
             Card(
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(28.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                shape = MacShapeMedium,
+                colors = CardDefaults.cardColors(containerColor = MacGlassFill),
+                border = BorderStroke(1.dp, MacGlassBorder)
             ) {
                 Column(modifier = Modifier.padding(20.dp)) {
                     Text(

@@ -13,6 +13,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.SupportMaverickPanel
+import com.example.ui.theme.MacSpace2
 
 @Composable
 fun SupportScreen() {
@@ -20,15 +21,13 @@ fun SupportScreen() {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp)
+            .padding(MacSpace2)
     ) {
         Text(
-            text = "SUPPORT",
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            letterSpacing = 1.sp,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
-            modifier = Modifier.padding(bottom = 16.dp)
+            text = "Support",
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onBackground,
+            modifier = Modifier.padding(bottom = MacSpace2)
         )
         SupportMaverickPanel()
     }

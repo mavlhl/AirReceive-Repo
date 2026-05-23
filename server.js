@@ -467,6 +467,81 @@ app.get('/download/:id', (req, res) => {
   });
 });
 
+function macDesignCss(accent = '#007aff') {
+  return `
+    :root {
+      color-scheme: dark light;
+      --mac-window: #000000;
+      --mac-content: #1c1c1e;
+      --mac-secondary: #2c2c2e;
+      --mac-tertiary: #3a3a3c;
+      --mac-separator: rgba(84, 84, 88, 0.65);
+      --mac-label: #ffffff;
+      --mac-label-secondary: rgba(235, 235, 245, 0.6);
+      --mac-blue: #007aff;
+      --mac-green: #30d158;
+      --mac-red: #ff453a;
+      --mac-orange: #ff9f0a;
+      --mac-glass: rgba(44, 44, 46, 0.72);
+      --mac-radius: 12px;
+      --mac-radius-lg: 16px;
+      --primary: ${accent};
+      --bg-color: var(--mac-content);
+      --card-bg: var(--mac-glass);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --text-main: var(--mac-label);
+      --text-muted: var(--mac-label-secondary);
+    }
+    body {
+      margin: 0;
+      background: var(--mac-window);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container { width: 90%; max-width: 560px; margin: 24px auto; }
+    .card {
+      background: var(--card-bg);
+      backdrop-filter: blur(40px) saturate(180%);
+      -webkit-backdrop-filter: blur(40px) saturate(180%);
+      border: 1px solid var(--border-color);
+      border-radius: var(--mac-radius-lg);
+      padding: 32px;
+      text-align: center;
+    }
+    h1 { font-size: 22px; font-weight: 600; margin: 0 0 8px; letter-spacing: -0.3px; }
+    .tagline { color: var(--text-muted); font-size: 13px; margin-bottom: 20px; line-height: 1.45; }
+    .gateway-nav {
+      display: inline-flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      justify-content: center;
+      margin-bottom: 24px;
+      padding: 4px;
+      background: var(--mac-secondary);
+      border-radius: var(--mac-radius);
+    }
+    .gateway-nav-link {
+      padding: 8px 12px;
+      border-radius: 8px;
+      border: none;
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .gateway-nav-link:hover { color: var(--primary); }
+    .gateway-nav-link.active {
+      color: var(--primary);
+      background: var(--mac-tertiary);
+    }
+    code, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+  `;
+}
+
 function gatewayNavHtml(activeNav) {
   const items = [
     { key: 'home', href: '/', label: 'Home' },
@@ -481,65 +556,15 @@ function gatewayNavHtml(activeNav) {
   }).join('') + '</nav>';
 }
 
-function gatewayPageHtml({ title, activeNav, accent = '#38bdf8', extraCss = '', bodyHtml }) {
+function gatewayPageHtml({ title, activeNav, accent = '#007aff', extraCss = '', bodyHtml }) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title}</title>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
   <style>
-    :root {
-      --bg-color: #0d1117;
-      --card-bg: #161b22;
-      --border-color: #30363d;
-      --primary: ${accent};
-      --text-main: #f0f6fc;
-      --text-muted: #8b949e;
-    }
-    body {
-      margin: 0;
-      background: var(--bg-color);
-      color: var(--text-main);
-      font-family: 'Plus Jakarta Sans', sans-serif;
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .container { width: 90%; max-width: 560px; margin: 24px auto; }
-    .card {
-      background: var(--card-bg);
-      border: 1px solid var(--border-color);
-      border-radius: 20px;
-      padding: 32px;
-      text-align: center;
-    }
-    h1 { font-size: 24px; margin: 0 0 8px; }
-    .tagline { color: var(--text-muted); font-size: 14px; margin-bottom: 20px; }
-    .gateway-nav {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      justify-content: center;
-      margin-bottom: 24px;
-    }
-    .gateway-nav-link {
-      padding: 8px 14px;
-      border-radius: 100px;
-      border: 1px solid var(--border-color);
-      color: var(--text-muted);
-      text-decoration: none;
-      font-size: 12px;
-      font-weight: 600;
-    }
-    .gateway-nav-link:hover { border-color: var(--primary); color: var(--primary); }
-    .gateway-nav-link.active {
-      border-color: var(--primary);
-      color: var(--primary);
-      background: rgba(56, 189, 248, 0.08);
-    }
+    ${macDesignCss(accent)}
     ${extraCss}
   </style>
 </head>
@@ -557,23 +582,26 @@ app.get('/', (req, res) => {
   res.send(gatewayPageHtml({
     title: 'AirReceive Gateway',
     activeNav: 'home',
-    accent: '#38bdf8',
+    accent: '#007aff',
     extraCss: `
     .hub-card {
       display: block;
       text-align: left;
-      padding: 20px;
-      margin-bottom: 12px;
-      border-radius: 16px;
+      padding: 16px 18px;
+      margin-bottom: 10px;
+      border-radius: var(--mac-radius);
       border: 1px solid var(--border-color);
-      background: rgba(22, 27, 34, 0.9);
+      background: var(--mac-glass);
+      backdrop-filter: blur(40px) saturate(180%);
+      -webkit-backdrop-filter: blur(40px) saturate(180%);
       color: var(--text-main);
       text-decoration: none;
-      transition: border-color 0.15s;
+      transition: background 0.15s, border-color 0.15s;
     }
-    .hub-card:hover { border-color: var(--primary); }
-    .hub-card strong { display: block; font-size: 16px; margin-bottom: 6px; color: var(--primary); }
+    .hub-card:hover { border-color: var(--primary); background: var(--mac-tertiary); }
+    .hub-card strong { display: block; font-size: 15px; margin-bottom: 4px; color: var(--text-main); font-weight: 600; }
     .hub-card span { font-size: 13px; color: var(--text-muted); line-height: 1.4; }
+    .hub-card::after { content: "›"; float: right; color: var(--text-muted); font-size: 18px; }
     .hub-status { font-size: 12px; color: var(--text-muted); margin-top: 16px; }
     `,
     bodyHtml: `
@@ -617,7 +645,7 @@ app.get('/support', (req, res) => {
   res.send(gatewayPageHtml({
     title: 'AirReceive — Support Maverick',
     activeNav: 'support',
-    accent: '#fbbf24',
+    accent: '#ff9f0a',
     extraCss: `
     .bmc-qr-wrap {
       display: inline-block;
@@ -631,9 +659,9 @@ app.get('/support', (req, res) => {
       display: inline-block;
       margin-top: 8px;
       padding: 14px 28px;
-      border-radius: 100px;
-      background: #fbbf24;
-      color: #0d1117;
+      border-radius: 10px;
+      background: #ff9f0a;
+      color: #1c1c1e;
       font-weight: 800;
       font-size: 15px;
       text-decoration: none;
@@ -666,25 +694,24 @@ app.get('/to-android', (req, res) => {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AirReceive — Send to Android</title>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg-color: #0d1117;
-      --card-bg: #161b22;
-      --border-color: #30363d;
-      --primary: #10B981; /* Emerald */
-      --primary-hover: #059669;
-      --text-main: #f0f6fc;
-      --text-muted: #8b949e;
-      --accent: #38bdf8;
+      --bg-color: #1c1c1e;
+      --card-bg: rgba(44, 44, 46, 0.72);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --primary: #30d158;
+      --primary-hover: #28b84c;
+      --text-main: #ffffff;
+      --text-muted: rgba(235, 235, 245, 0.6);
+      --accent: #007aff;
     }
 
     body {
       margin: 0;
       padding: 0;
-      background-color: var(--bg-color);
+      background-color: #000000;
       color: var(--text-main);
-      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
       min-height: 100vh;
       display: flex;
       flex-direction: column;
@@ -701,7 +728,7 @@ app.get('/to-android', (req, res) => {
     .card {
       background-color: var(--card-bg);
       border: 1px solid var(--border-color);
-      border-radius: 20px;
+      border-radius: 12px;
       padding: 32px;
       text-align: center;
       box-shadow: 0 10px 30px rgba(0,0,0,0.5);
@@ -714,7 +741,7 @@ app.get('/to-android', (req, res) => {
       width: 64px;
       height: 64px;
       border-radius: 50%;
-      background: linear-gradient(135deg, #10b981, #059669);
+      background: #30d158;
       box-shadow: 0 0 20px rgba(16, 185, 129, 0.4);
       margin-bottom: 16px;
     }
@@ -750,7 +777,7 @@ app.get('/to-android', (req, res) => {
       border: 1px solid rgba(239, 68, 68, 0.2);
       color: #fc8181;
       padding: 6px 14px;
-      border-radius: 100px;
+      border-radius: 10px;
       font-size: 11px;
       font-weight: 700;
       letter-spacing: 0.5px;
@@ -770,7 +797,7 @@ app.get('/to-android', (req, res) => {
       width: 8px;
       height: 8px;
       border-radius: 50%;
-      background-color: #ef4444;
+      background-color: #ff453a;
       margin-right: 8px;
       animation: pulse 1.5s infinite;
     }
@@ -919,7 +946,7 @@ app.get('/to-android', (req, res) => {
     }
 
     code {
-      font-family: 'JetBrains Mono', monospace;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       background-color: rgba(255,255,255,0.06);
       padding: 2px 6px;
       border-radius: 4px;
@@ -943,7 +970,7 @@ app.get('/to-android', (req, res) => {
       display: inline-block;
       margin-bottom: 20px;
       padding: 10px 18px;
-      border-radius: 100px;
+      border-radius: 10px;
       border: 1px solid var(--border-color);
       color: var(--accent);
       text-decoration: none;
@@ -964,7 +991,7 @@ app.get('/to-android', (req, res) => {
     }
     .gateway-nav-link {
       padding: 8px 14px;
-      border-radius: 100px;
+      border-radius: 10px;
       border: 1px solid var(--border-color);
       color: var(--text-muted);
       text-decoration: none;
@@ -1002,7 +1029,7 @@ app.get('/to-android', (req, res) => {
       border: 1px solid var(--border-color);
       color: var(--accent);
       padding: 6px 12px;
-      border-radius: 100px;
+      border-radius: 10px;
       font-size: 12px;
       cursor: pointer;
       margin-bottom: 8px;
@@ -1321,21 +1348,20 @@ app.get('/send', (req, res) => {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AirReceive — Send files</title>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg-color: #0d1117;
-      --card-bg: #161b22;
-      --border-color: #30363d;
-      --primary: #38bdf8;
-      --text-main: #f0f6fc;
-      --text-muted: #8b949e;
+      --bg-color: #1c1c1e;
+      --card-bg: rgba(44, 44, 46, 0.72);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --primary: #007aff;
+      --text-main: #ffffff;
+      --text-muted: rgba(235, 235, 245, 0.6);
     }
     body {
       margin: 0;
       background: var(--bg-color);
       color: var(--text-main);
-      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
       min-height: 100vh;
       display: flex;
       align-items: center;
@@ -1345,7 +1371,7 @@ app.get('/send', (req, res) => {
     .card {
       background: var(--card-bg);
       border: 1px solid var(--border-color);
-      border-radius: 20px;
+      border-radius: 12px;
       padding: 32px;
     }
     h1 { font-size: 24px; margin: 0 0 8px; text-align: center; }
@@ -1355,7 +1381,7 @@ app.get('/send', (req, res) => {
       display: inline-block;
       margin: 4px;
       padding: 8px 14px;
-      border-radius: 100px;
+      border-radius: 10px;
       border: 1px solid var(--border-color);
       color: var(--primary);
       text-decoration: none;
@@ -1369,7 +1395,7 @@ app.get('/send', (req, res) => {
       padding: 10px 12px;
       border-radius: 10px;
       border: 1px solid var(--border-color);
-      background: #0d1117;
+      background: #1c1c1e;
       color: var(--text-main);
       font-size: 14px;
       margin-bottom: 16px;
@@ -1408,9 +1434,9 @@ app.get('/send', (req, res) => {
       width: 100%;
       padding: 14px;
       border: none;
-      border-radius: 100px;
-      background: linear-gradient(135deg, #38bdf8, #0ea5e9);
-      color: #0d1117;
+      border-radius: 10px;
+      background: #007aff;
+      color: #ffffff;
       font-weight: 700;
       font-size: 15px;
       cursor: pointer;
@@ -1440,7 +1466,7 @@ app.get('/send', (req, res) => {
       border: 1px solid var(--border-color);
       color: var(--primary);
       padding: 6px 12px;
-      border-radius: 100px;
+      border-radius: 10px;
       font-size: 12px;
       cursor: pointer;
       margin-bottom: 8px;
@@ -1454,7 +1480,7 @@ app.get('/send', (req, res) => {
     }
     .gateway-nav-link {
       padding: 8px 14px;
-      border-radius: 100px;
+      border-radius: 10px;
       border: 1px solid var(--border-color);
       color: var(--text-muted);
       text-decoration: none;
@@ -1633,21 +1659,20 @@ app.get('/receive', (req, res) => {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AirReceive — Receive photos</title>
-  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;700;800&family=JetBrains+Mono&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg-color: #0d1117;
-      --card-bg: #161b22;
-      --border-color: #30363d;
-      --primary: #38bdf8;
-      --text-main: #f0f6fc;
-      --text-muted: #8b949e;
+      --bg-color: #1c1c1e;
+      --card-bg: rgba(44, 44, 46, 0.72);
+      --border-color: rgba(255, 255, 255, 0.08);
+      --primary: #007aff;
+      --text-main: #ffffff;
+      --text-muted: rgba(235, 235, 245, 0.6);
     }
     body {
       margin: 0;
       background: var(--bg-color);
       color: var(--text-main);
-      font-family: 'Plus Jakarta Sans', sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, sans-serif;
       min-height: 100vh;
       display: flex;
       align-items: center;
@@ -1657,7 +1682,7 @@ app.get('/receive', (req, res) => {
     .card {
       background: var(--card-bg);
       border: 1px solid var(--border-color);
-      border-radius: 20px;
+      border-radius: 12px;
       padding: 32px;
       text-align: center;
     }
@@ -1667,7 +1692,7 @@ app.get('/receive', (req, res) => {
       display: inline-block;
       margin-bottom: 20px;
       padding: 10px 18px;
-      border-radius: 100px;
+      border-radius: 10px;
       border: 1px solid var(--border-color);
       color: var(--primary);
       text-decoration: none;
@@ -1678,7 +1703,7 @@ app.get('/receive', (req, res) => {
       display: inline-flex;
       align-items: center;
       padding: 6px 14px;
-      border-radius: 100px;
+      border-radius: 10px;
       font-size: 11px;
       font-weight: 700;
       text-transform: uppercase;
@@ -1694,7 +1719,7 @@ app.get('/receive', (req, res) => {
     }
     .status-badge .dot {
       width: 8px; height: 8px; border-radius: 50%;
-      background: #ef4444; margin-right: 8px;
+      background: #ff453a; margin-right: 8px;
     }
     .status-badge.connected .dot { background: var(--primary); }
     .batch-wrap {
@@ -1724,14 +1749,14 @@ app.get('/receive', (req, res) => {
       aspect-ratio: 1;
       object-fit: cover;
       border-radius: 8px;
-      background: #0d1117;
+      background: #1c1c1e;
     }
     .action-buttons { margin-top: 4px; }
     .save-all-btn, .download-all-btn {
       display: block;
       width: 100%;
       padding: 14px 20px;
-      border-radius: 100px;
+      border-radius: 10px;
       border: none;
       font-weight: 700;
       font-size: 15px;
@@ -1740,8 +1765,8 @@ app.get('/receive', (req, res) => {
       cursor: pointer;
     }
     .save-all-btn {
-      background: linear-gradient(135deg, #38bdf8, #0ea5e9);
-      color: #0d1117;
+      background: #007aff;
+      color: #ffffff;
     }
     .download-all-btn {
       margin-top: 10px;
@@ -1866,7 +1891,7 @@ app.get('/receive', (req, res) => {
     }
     .utility-btn {
       padding: 8px 14px;
-      border-radius: 100px;
+      border-radius: 10px;
       border: 1px solid var(--border-color);
       background: transparent;
       color: var(--primary);
@@ -1884,7 +1909,7 @@ app.get('/receive', (req, res) => {
     }
     .gateway-nav-link {
       padding: 8px 14px;
-      border-radius: 100px;
+      border-radius: 10px;
       border: 1px solid var(--border-color);
       color: var(--text-muted);
       text-decoration: none;

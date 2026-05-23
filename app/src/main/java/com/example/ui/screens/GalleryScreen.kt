@@ -30,6 +30,7 @@ import com.example.EmptyGalleryState
 import com.example.GalleryGridView
 import com.example.data.ReceivedPhoto
 import com.example.sharePhotoFile
+import com.example.ui.theme.MacSpace2
 import com.example.ui.viewmodel.AirReceiveViewModel
 import com.example.ui.viewmodel.ServerState
 import java.io.File
@@ -48,7 +49,7 @@ fun GalleryScreen(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .padding(MacSpace2),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Row(
@@ -58,11 +59,9 @@ fun GalleryScreen(
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
-                    text = "RECEIVED PHOTOS",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 1.sp,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f)
+                    text = "Received photos",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onBackground,
                 )
                 Spacer(modifier = Modifier.width(8.dp))
                 Box(

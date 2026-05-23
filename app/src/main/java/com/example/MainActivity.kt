@@ -59,8 +59,26 @@ import androidx.lifecycle.repeatOnLifecycle
 import coil.compose.AsyncImage
 import com.example.data.ReceivedPhoto
 import com.example.server.GatewayReceiverDevice
+import com.example.ui.components.MacNavItem
+import com.example.ui.components.MacPrimaryButton
+import com.example.ui.components.MacPrimaryButtonText
+import com.example.ui.components.MacSecondaryButton
+import com.example.ui.components.MacSegmentedNavBar
+import com.example.ui.components.MacStatusDot
 import com.example.ui.navigation.AirReceiveNavHost
 import com.example.ui.navigation.AppRoute
+import com.example.ui.theme.MacContentBg
+import com.example.ui.theme.MacGlassBorder
+import com.example.ui.theme.MacGlassFill
+import com.example.ui.theme.MacRedContainer
+import com.example.ui.theme.MacShapeButton
+import com.example.ui.theme.MacShapeLarge
+import com.example.ui.theme.MacShapeMedium
+import com.example.ui.theme.MacSpace2
+import com.example.ui.theme.MacSystemBlue
+import com.example.ui.theme.MacSystemGreen
+import com.example.ui.theme.MacSystemOrange
+import com.example.ui.theme.MacSystemRed
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.*
 import androidx.navigation.compose.currentBackStackEntryAsState
@@ -81,10 +99,10 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         setContent {
-            MyApplicationTheme(darkTheme = true) { // Force Dark Premium Vibe
+            MyApplicationTheme(darkTheme = true) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
-                    color = Color(0xFF06070D) // Luxurious deep slate background
+                    color = MacContentBg,
                 ) {
                     AirReceiveApp(viewModel)
                 }
@@ -183,86 +201,62 @@ fun AirReceiveApp(viewModel: AirReceiveViewModel) {
     Scaffold(
         topBar = {
             CenterAlignedTopAppBar(
+                modifier = Modifier.height(52.dp),
                 title = {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
+                        horizontalArrangement = Arrangement.Center,
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(if (serverState.isRunning) Color(0xFF10B981) else Color(0xFFEF4444))
-                        )
+                        MacStatusDot(isActive = serverState.isRunning)
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "AIRRECEIVE",
-                            fontSize = 17.sp,
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 2.sp,
-                            color = MaterialTheme.colorScheme.onSurface
+                            text = "AirReceive",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onSurface,
                         )
                     }
                 },
-                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f),
-                    titleContentColor = MaterialTheme.colorScheme.onSurface
-                )
+                colors =
+                    TopAppBarDefaults.centerAlignedTopAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+                        titleContentColor = MaterialTheme.colorScheme.onSurface,
+                    ),
             )
         },
         bottomBar = {
-            NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                NavigationBarItem(
-                    selected = currentRoute == AppRoute.Gallery,
-                    onClick = { navController.navigate(AppRoute.Gallery) { launchSingleTop = true } },
-                    icon = {
-                        if (photoList.isNotEmpty()) {
-                            BadgedBox(badge = { Badge { Text("${photoList.size.coerceAtMost(99)}") } }) {
-                                Icon(Icons.Default.Home, contentDescription = "Home")
-                            }
-                        } else {
-                            Icon(Icons.Default.Home, contentDescription = "Home")
-                        }
-                    },
-                    label = { Text("Home") }
-                )
-                NavigationBarItem(
-                    selected = currentRoute == AppRoute.Send,
-                    onClick = { navController.navigate(AppRoute.Send) { launchSingleTop = true } },
-                    icon = {
-                        if (needsGatewaySetup) {
-                            BadgedBox(badge = { Badge { Text("") } }) {
-                                Icon(Icons.Default.Send, contentDescription = "Send")
-                            }
-                        } else {
-                            Icon(Icons.Default.Send, contentDescription = "Send")
-                        }
-                    },
-                    label = { Text("Send") }
-                )
-                NavigationBarItem(
-                    selected = currentRoute == AppRoute.Settings,
-                    onClick = { navController.navigate(AppRoute.Settings) { launchSingleTop = true } },
-                    icon = {
-                        if (showReceiverHint) {
-                            BadgedBox(badge = { Badge { Text("") } }) {
-                                Icon(Icons.Default.Settings, contentDescription = "Settings")
-                            }
-                        } else {
-                            Icon(Icons.Default.Settings, contentDescription = "Settings")
-                        }
-                    },
-                    label = { Text("Settings") }
-                )
-                NavigationBarItem(
-                    selected = currentRoute == AppRoute.Support,
-                    onClick = { navController.navigate(AppRoute.Support) { launchSingleTop = true } },
-                    icon = {
-                        Icon(Icons.Default.Favorite, contentDescription = "Support")
-                    },
-                    label = { Text("Support") }
-                )
-            }
+            MacSegmentedNavBar(
+                items =
+                    listOf(
+                        MacNavItem(
+                            route = AppRoute.Gallery,
+                            label = "Home",
+                            icon = Icons.Default.Home,
+                            showBadge = photoList.isNotEmpty(),
+                            badgeText = "${photoList.size.coerceAtMost(99)}",
+                        ),
+                        MacNavItem(
+                            route = AppRoute.Send,
+                            label = "Send",
+                            icon = Icons.Default.Send,
+                            showBadge = needsGatewaySetup,
+                        ),
+                        MacNavItem(
+                            route = AppRoute.Settings,
+                            label = "Settings",
+                            icon = Icons.Default.Settings,
+                            showBadge = showReceiverHint,
+                        ),
+                        MacNavItem(
+                            route = AppRoute.Support,
+                            label = "Support",
+                            icon = Icons.Default.Favorite,
+                        ),
+                    ),
+                selectedRoute = currentRoute,
+                onItemSelected = { route ->
+                    navController.navigate(route) { launchSingleTop = true }
+                },
+            )
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { innerPadding ->
@@ -314,7 +308,7 @@ fun GatewayOptionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(MacShapeMedium)
             .clickable(onClick = onClick)
             .padding(vertical = 8.dp, horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -361,9 +355,9 @@ fun ServerStatusCard(
         modifier = Modifier
             .fillMaxWidth()
             .testTag("status_card"),
-        shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+        shape = MacShapeMedium,
+        colors = CardDefaults.cardColors(containerColor = MacGlassFill),
+        border = BorderStroke(1.dp, MacGlassBorder)
     ) {
         Column(
             modifier = Modifier.padding(20.dp)
@@ -380,7 +374,7 @@ fun ServerStatusCard(
                                 .size(10.dp)
                                 .drawBehind {
                                     drawCircle(
-                                        color = if (state.isRunning) Color(0xFF10B981) else Color(0xFFEF4444),
+                                        color = if (state.isRunning) MacSystemGreen else MacSystemRed,
                                         alpha = if (state.isRunning) alphaAnim else 1.0f
                                     )
                                 }
@@ -391,7 +385,7 @@ fun ServerStatusCard(
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold,
                             letterSpacing = 1.2.sp,
-                            color = if (state.isRunning) MaterialTheme.colorScheme.primary else Color(0xFFF87171)
+                            color = if (state.isRunning) MaterialTheme.colorScheme.primary else MacSystemRed
                         )
                     }
                     Spacer(modifier = Modifier.height(4.dp))
@@ -451,7 +445,7 @@ fun ServerStatusCard(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
+                        .clip(MacShapeLarge)
                         .background(MaterialTheme.colorScheme.surfaceVariant)
                         .padding(14.dp)
                 ) {
@@ -460,7 +454,7 @@ fun ServerStatusCard(
                             text = if (state.customUrl.isNotEmpty()) "⚡ CLOUD PORTAL ADDRESS (ACTIVE)" else "AIRRECEIVE PORTAL ADDRESS",
                             fontSize = 10.sp,
                             fontWeight = FontWeight.SemiBold,
-                            color = if (state.customUrl.isNotEmpty()) Color(0xFF10B981) else MaterialTheme.colorScheme.onSurfaceVariant,
+                            color = if (state.customUrl.isNotEmpty()) MacSystemGreen else MaterialTheme.colorScheme.onSurfaceVariant,
                             letterSpacing = 1.sp
                         )
                         Spacer(modifier = Modifier.height(4.dp))
@@ -469,7 +463,7 @@ fun ServerStatusCard(
                             fontSize = 18.sp,
                             fontFamily = FontFamily.Monospace,
                             fontWeight = FontWeight.Bold,
-                            color = if (state.customUrl.isNotEmpty()) Color(0xFF10B981) else MaterialTheme.colorScheme.primary,
+                            color = if (state.customUrl.isNotEmpty()) MacSystemGreen else MaterialTheme.colorScheme.primary,
                             modifier = Modifier.testTag("server_url_text"),
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
@@ -481,23 +475,23 @@ fun ServerStatusCard(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(Color(0xFFEF4444).copy(alpha = 0.08f))
-                        .border(1.dp, Color(0xFFEF4444).copy(alpha = 0.2f), RoundedCornerShape(16.dp))
+                        .clip(MacShapeLarge)
+                        .background(MacRedContainer)
+                        .border(1.dp, MacSystemRed.copy(alpha = 0.2f), MacShapeLarge)
                         .padding(14.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Icon(
                             imageVector = Icons.Default.Warning,
                             contentDescription = "No local network detected",
-                            tint = Color(0xFFEF4444),
+                            tint = MacSystemRed,
                             modifier = Modifier.size(20.dp)
                         )
                         Spacer(modifier = Modifier.width(10.dp))
                         Text(
                             text = "Please connect to a Wi-Fi network or configure a gateway in Settings.",
                             fontSize = 12.sp,
-                            color = Color(0xFFFCA5A5)
+                            color = MacSystemRed.copy(alpha = 0.85f)
                         )
                     }
                 }
@@ -510,9 +504,9 @@ fun ServerStatusCard(
                     .fillMaxWidth()
                     .height(48.dp)
                     .testTag("toggle_server_btn"),
-                shape = CircleShape,
+                shape = MacShapeButton,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (state.isRunning) Color(0xFFBA1A1A) else MaterialTheme.colorScheme.primary,
+                    containerColor = if (state.isRunning) MacSystemRed else MaterialTheme.colorScheme.primary,
                     contentColor = if (state.isRunning) Color.White else MaterialTheme.colorScheme.onPrimary
                 )
             ) {
@@ -541,9 +535,9 @@ fun SharePortalPanel(url: String) {
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+        shape = MacShapeMedium,
+        colors = CardDefaults.cardColors(containerColor = MacGlassFill),
+        border = BorderStroke(1.dp, MacGlassBorder)
     ) {
         Column(
             modifier = Modifier.padding(20.dp),
@@ -567,7 +561,7 @@ fun SharePortalPanel(url: String) {
                 Box(
                     modifier = Modifier
                         .size(110.dp)
-                        .clip(RoundedCornerShape(16.dp))
+                        .clip(MacShapeLarge)
                         .background(Color.White)
                         .padding(8.dp),
                     contentAlignment = Alignment.Center
@@ -640,7 +634,7 @@ fun SharePortalPanel(url: String) {
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("btn_copy_link"),
-                shape = CircleShape,
+                shape = MacShapeButton,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant,
                     contentColor = MaterialTheme.colorScheme.primary
@@ -673,9 +667,9 @@ fun SupportMaverickPanel() {
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, Color(0xFFFBBF24).copy(alpha = 0.35f))
+        shape = MacShapeMedium,
+        colors = CardDefaults.cardColors(containerColor = MacGlassFill),
+        border = BorderStroke(1.dp, MacSystemOrange.copy(alpha = 0.35f))
     ) {
         Column(
             modifier = Modifier.padding(20.dp),
@@ -686,7 +680,7 @@ fun SupportMaverickPanel() {
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.2.sp,
-                color = Color(0xFFFBBF24),
+                color = MacSystemOrange,
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(modifier = Modifier.height(8.dp))
@@ -702,7 +696,7 @@ fun SupportMaverickPanel() {
             Box(
                 modifier = Modifier
                     .size(200.dp)
-                    .clip(RoundedCornerShape(16.dp))
+                    .clip(MacShapeLarge)
                     .background(Color.White)
                     .padding(12.dp),
                 contentAlignment = Alignment.Center
@@ -738,10 +732,10 @@ fun SupportMaverickPanel() {
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("btn_bmc_donate"),
-                shape = CircleShape,
+                shape = MacShapeButton,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFFFBBF24),
-                    contentColor = Color(0xFF0D1117)
+                    containerColor = MacSystemOrange,
+                    contentColor = MacContentBg
                 )
             ) {
                 Icon(
@@ -760,9 +754,9 @@ fun SupportMaverickPanel() {
 fun SendToIphoneSetupCard(onOpenSettings: () -> Unit = {}) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.25f))
+        shape = MacShapeMedium,
+        colors = CardDefaults.cardColors(containerColor = MacGlassFill),
+        border = BorderStroke(1.dp, MacSystemBlue.copy(alpha = 0.25f))
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
             Text(
@@ -770,7 +764,7 @@ fun SendToIphoneSetupCard(onOpenSettings: () -> Unit = {}) {
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.2.sp,
-                color = Color(0xFF38BDF8)
+                color = MacSystemBlue
             )
             Spacer(modifier = Modifier.height(8.dp))
             Text(
@@ -787,7 +781,7 @@ fun SendToIphoneSetupCard(onOpenSettings: () -> Unit = {}) {
             )
             Spacer(modifier = Modifier.height(10.dp))
             TextButton(onClick = onOpenSettings) {
-                Text("Open Settings", color = Color(0xFF38BDF8), fontWeight = FontWeight.SemiBold)
+                Text("Open Settings", color = MacSystemBlue, fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -835,9 +829,9 @@ fun LocalWifiSendPanel(
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.35f))
+        shape = MacShapeMedium,
+        colors = CardDefaults.cardColors(containerColor = MacGlassFill),
+        border = BorderStroke(1.dp, MacSystemGreen.copy(alpha = 0.35f))
     ) {
         Column(modifier = Modifier.padding(20.dp)) {
             Text(
@@ -845,7 +839,7 @@ fun LocalWifiSendPanel(
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.2.sp,
-                color = Color(0xFF10B981),
+                color = MacSystemGreen,
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(modifier = Modifier.height(8.dp))
@@ -883,7 +877,7 @@ fun LocalWifiSendPanel(
                             Icon(
                                 Icons.Default.Check,
                                 contentDescription = "Save URL",
-                                tint = Color(0xFF10B981),
+                                tint = MacSystemGreen,
                                 modifier = Modifier.size(18.dp)
                             )
                         }
@@ -897,7 +891,7 @@ fun LocalWifiSendPanel(
                     text = "Saved: $targetUrl",
                     fontSize = 11.sp,
                     fontFamily = FontFamily.Monospace,
-                    color = Color(0xFF10B981),
+                    color = MacSystemGreen,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -911,12 +905,12 @@ fun LocalWifiSendPanel(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("btn_send_local"),
-                shape = CircleShape,
+                shape = MacShapeButton,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF10B981),
-                    contentColor = Color(0xFF0D1117),
-                    disabledContainerColor = Color(0xFF10B981).copy(alpha = 0.35f),
-                    disabledContentColor = Color(0xFF0D1117).copy(alpha = 0.5f)
+                    containerColor = MacSystemGreen,
+                    contentColor = MacContentBg,
+                    disabledContainerColor = MacSystemGreen.copy(alpha = 0.35f),
+                    disabledContentColor = MacContentBg.copy(alpha = 0.5f)
                 )
             ) {
                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -934,8 +928,8 @@ fun LocalWifiSendPanel(
                 },
                 enabled = canSend,
                 modifier = Modifier.fillMaxWidth(),
-                shape = CircleShape,
-                border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.5f))
+                shape = MacShapeButton,
+                border = BorderStroke(1.dp, MacSystemGreen.copy(alpha = 0.5f))
             ) {
                 Text("Photo gallery", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
             }
@@ -976,9 +970,9 @@ fun SendToIphonePanel(
 
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(28.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.35f))
+        shape = MacShapeMedium,
+        colors = CardDefaults.cardColors(containerColor = MacGlassFill),
+        border = BorderStroke(1.dp, MacSystemBlue.copy(alpha = 0.35f))
     ) {
         Column(
             modifier = Modifier.padding(20.dp),
@@ -989,7 +983,7 @@ fun SendToIphonePanel(
                 fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 1.2.sp,
-                color = Color(0xFF38BDF8),
+                color = MacSystemBlue,
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(modifier = Modifier.height(12.dp))
@@ -1013,7 +1007,7 @@ fun SendToIphonePanel(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 TextButton(onClick = onRefreshReceivers) {
-                    Text("Refresh", fontSize = 12.sp, color = Color(0xFF38BDF8))
+                    Text("Refresh", fontSize = 12.sp, color = MacSystemBlue)
                 }
             }
 
@@ -1044,7 +1038,7 @@ fun SendToIphonePanel(
                 Box(
                     modifier = Modifier
                         .size(110.dp)
-                        .clip(RoundedCornerShape(16.dp))
+                        .clip(MacShapeLarge)
                         .background(Color.White)
                         .padding(8.dp),
                     contentAlignment = Alignment.Center
@@ -1063,7 +1057,7 @@ fun SendToIphonePanel(
                         text = receiveUrl,
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
-                        color = Color(0xFF38BDF8),
+                        color = MacSystemBlue,
                         maxLines = 3,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -1081,10 +1075,10 @@ fun SendToIphonePanel(
                     Toast.makeText(context, "Receive page URL copied!", Toast.LENGTH_SHORT).show()
                 },
                 modifier = Modifier.fillMaxWidth(),
-                shape = CircleShape,
+                shape = MacShapeButton,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    contentColor = Color(0xFF38BDF8)
+                    contentColor = MacSystemBlue
                 )
             ) {
                 Icon(Icons.Default.Share, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -1100,12 +1094,12 @@ fun SendToIphonePanel(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("btn_send_to_iphone"),
-                shape = CircleShape,
+                shape = MacShapeButton,
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = Color(0xFF38BDF8),
-                    contentColor = Color(0xFF0D1117),
-                    disabledContainerColor = Color(0xFF38BDF8).copy(alpha = 0.35f),
-                    disabledContentColor = Color(0xFF0D1117).copy(alpha = 0.5f)
+                    containerColor = MacSystemBlue,
+                    contentColor = MacContentBg,
+                    disabledContainerColor = MacSystemBlue.copy(alpha = 0.35f),
+                    disabledContentColor = MacContentBg.copy(alpha = 0.5f)
                 )
             ) {
                 Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -1123,8 +1117,8 @@ fun SendToIphonePanel(
                 },
                 enabled = canSend,
                 modifier = Modifier.fillMaxWidth(),
-                shape = CircleShape,
-                border = BorderStroke(1.dp, Color(0xFF38BDF8).copy(alpha = 0.5f))
+                shape = MacShapeButton,
+                border = BorderStroke(1.dp, MacSystemBlue.copy(alpha = 0.5f))
             ) {
                 Text("Photo gallery", fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
             }
@@ -1142,15 +1136,15 @@ fun ActiveTransferCard(transfer: ActiveTransfer) {
         modifier = Modifier
             .fillMaxWidth()
             .testTag("active_transfer_card"),
-        shape = RoundedCornerShape(28.dp),
+        shape = MacShapeMedium,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
         ),
         border = BorderStroke(
             1.dp,
             when {
-                isDone -> Color(0xFF10B981)
-                isFailed -> Color(0xFFEF4444)
+                isDone -> MacSystemGreen
+                isFailed -> MacSystemRed
                 else -> MaterialTheme.colorScheme.outline
             }
         )
@@ -1173,8 +1167,8 @@ fun ActiveTransferCard(transfer: ActiveTransfer) {
                             .clip(CircleShape)
                             .background(
                                 when {
-                                    isDone -> Color(0xFF10B981).copy(alpha = 0.2f)
-                                    isFailed -> Color(0xFFEF4444).copy(alpha = 0.2f)
+                                    isDone -> MacSystemGreen.copy(alpha = 0.2f)
+                                    isFailed -> MacSystemRed.copy(alpha = 0.2f)
                                     else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
                                 }
                             ),
@@ -1188,8 +1182,8 @@ fun ActiveTransferCard(transfer: ActiveTransfer) {
                             },
                             contentDescription = null,
                             tint = when {
-                                isDone -> Color(0xFF34D399)
-                                isFailed -> Color(0xFFF87171)
+                                isDone -> MacSystemGreen
+                                isFailed -> MacSystemRed
                                 else -> MaterialTheme.colorScheme.primary
                             },
                             modifier = Modifier.size(20.dp)
@@ -1226,8 +1220,8 @@ fun ActiveTransferCard(transfer: ActiveTransfer) {
                     fontSize = 15.sp,
                     fontWeight = FontWeight.Black,
                     color = when {
-                        isDone -> Color(0xFF34D399)
-                        isFailed -> Color(0xFFF87171)
+                        isDone -> MacSystemGreen
+                        isFailed -> MacSystemRed
                         else -> MaterialTheme.colorScheme.primary
                     }
                 )
@@ -1242,8 +1236,8 @@ fun ActiveTransferCard(transfer: ActiveTransfer) {
                     .height(6.dp)
                     .clip(RoundedCornerShape(3.dp)),
                 color = when {
-                    isDone -> Color(0xFF10B981)
-                    isFailed -> Color(0xFFEF4444)
+                    isDone -> MacSystemGreen
+                    isFailed -> MacSystemRed
                     else -> MaterialTheme.colorScheme.primary
                 },
                 trackColor = MaterialTheme.colorScheme.surfaceVariant
@@ -1467,7 +1461,7 @@ fun PhotoCard(
         modifier = Modifier
             .fillMaxWidth()
             .aspectRatio(0.82f)
-            .clip(RoundedCornerShape(18.dp))
+            .clip(MacShapeMedium)
             .clickable(onClick = onClick)
             .testTag("photo_card_${photo.id}"),
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
@@ -1543,7 +1537,7 @@ fun PhotoCard(
                         Icon(
                             imageVector = Icons.Default.Done,
                             contentDescription = "Save to Photos",
-                            tint = Color(0xFF10B981),
+                            tint = MacSystemGreen,
                             modifier = Modifier.size(13.dp)
                         )
                     }
@@ -1574,7 +1568,7 @@ fun PhotoCard(
                     Icon(
                         imageVector = Icons.Default.Delete,
                         contentDescription = "Delete",
-                        tint = Color(0xFFEF4444),
+                        tint = MacSystemRed,
                         modifier = Modifier.size(13.dp)
                     )
                 }
@@ -1634,7 +1628,7 @@ fun FullscreenPhotoViewer(
                     Text(
                         text = "From ${photo.senderIp}",
                         fontSize = 11.sp,
-                        color = Color(0xFF9CA3AF)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
             }
@@ -1706,13 +1700,13 @@ fun FullscreenPhotoViewer(
                     modifier = Modifier
                         .size(48.dp)
                         .clip(CircleShape)
-                        .background(Color(0xFF7F1D1D).copy(alpha = 0.5f))
-                        .border(1.dp, Color(0xFFEF4444), CircleShape)
+                        .background(MacRedContainer)
+                        .border(1.dp, MacSystemRed, CircleShape)
                 ) {
                     Icon(
                         imageVector = Icons.Default.Delete,
                         contentDescription = "Delete from App",
-                        tint = Color(0xFFEF4444)
+                        tint = MacSystemRed
                     )
                 }
             }

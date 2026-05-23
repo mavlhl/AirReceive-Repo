@@ -12,7 +12,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import com.example.ui.theme.MacGlassBorder
+import com.example.ui.theme.MacGlassFill
+import com.example.ui.theme.MacShapeMedium
+import com.example.ui.theme.MacSpace2
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -46,7 +49,7 @@ fun SendScreen(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
+            .padding(MacSpace2),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         when {
@@ -79,9 +82,9 @@ fun SendScreen(
             else -> {
                 Card(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(28.dp),
-                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)
+                    shape = MacShapeMedium,
+                    colors = CardDefaults.cardColors(containerColor = MacGlassFill),
+                    border = BorderStroke(1.dp, MacGlassBorder)
                 ) {
                     Column(modifier = Modifier.padding(20.dp)) {
                         Text(

@@ -273,12 +273,9 @@ class AirReceiveServer(
             <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=0">
             <title>AirReceive - Send Photos</title>
             <style>
+                ${com.example.ui.theme.MacWebStyles.ROOT_VARS}
+                ${com.example.ui.theme.MacWebStyles.BODY_BASE}
                 body {
-                    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-                    background-color: #0b0c10;
-                    color: #ffffff;
-                    margin: 0;
-                    padding: 0;
                     display: flex;
                     flex-direction: column;
                     align-items: center;
@@ -291,10 +288,10 @@ class AirReceiveServer(
                     max-width: 420px;
                     text-align: center;
                     padding: 32px 24px;
-                    background: rgba(22, 28, 45, 0.45);
-                    border-radius: 28px;
-                    backdrop-filter: blur(24px);
-                    -webkit-backdrop-filter: blur(24px);
+                    background: var(--mac-glass);
+                    border-radius: var(--mac-radius-lg);
+                    backdrop-filter: blur(40px) saturate(180%);
+                    -webkit-backdrop-filter: blur(40px) saturate(180%);
                     box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
                     border: 1px solid rgba(255, 255, 255, 0.08);
                 }
@@ -335,7 +332,7 @@ class AirReceiveServer(
                 }
                 p {
                     font-size: 14px;
-                    color: #a0aec0;
+                    color: var(--mac-label-secondary);
                     margin: 0 0 28px 0;
                     line-height: 1.5;
                 }
@@ -346,7 +343,7 @@ class AirReceiveServer(
                     font-size: 16px;
                     font-weight: 600;
                     padding: 16px;
-                    border-radius: 16px;
+                    border-radius: var(--mac-radius);
                     border: none;
                     cursor: pointer;
                     transition: background-color 0.2s, transform 0.1s;
@@ -420,7 +417,7 @@ class AirReceiveServer(
                 }
                 .progress-fill {
                     height: 100%;
-                    background-color: #34d399;
+                    background-color: var(--mac-green);
                     width: 0%;
                     transition: width 0.15s ease-out;
                     border-radius: 3px;
@@ -432,10 +429,10 @@ class AirReceiveServer(
                     border-radius: 12px;
                     white-space: nowrap;
                 }
-                .status-waiting { background-color: rgba(245, 158, 11, 0.12); color: #fbbf24; }
-                .status-uploading { background-color: rgba(59, 130, 246, 0.12); color: #60a5fa; }
-                .status-completed { background-color: rgba(16, 185, 129, 0.12); color: #34d399; }
-                .status-failed { background-color: rgba(239, 68, 68, 0.12); color: #f87171; }
+                .status-waiting { background-color: rgba(255, 159, 10, 0.15); color: var(--mac-orange); }
+                .status-uploading { background-color: rgba(0, 122, 255, 0.15); color: var(--mac-blue); }
+                .status-completed { background-color: rgba(48, 209, 88, 0.15); color: var(--mac-green); }
+                .status-failed { background-color: rgba(255, 69, 58, 0.15); color: var(--mac-red); }
             </style>
         </head>
         <body>
