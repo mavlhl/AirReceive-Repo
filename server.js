@@ -1209,26 +1209,6 @@ app.get('/to-android', (req, res) => {
 
     urlPlaceholder.textContent = window.location.origin;
 
-    // #region agent log
-    function __logToAndroidThemeDiag(hypothesisId) {
-      const el = document.getElementById('dropZone');
-      const ins = document.querySelector('.to-android-page .instructions');
-      const toast = document.getElementById('successToast');
-      const dz = el ? getComputedStyle(el) : null;
-      const insS = ins ? getComputedStyle(ins) : null;
-      const toastS = toast ? getComputedStyle(toast) : null;
-      fetch('http://127.0.0.1:7427/ingest/e9f47ee5-3ad4-471b-aaa3-2e53e96becd0',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'c78bc5'},body:JSON.stringify({sessionId:'c78bc5',location:'server.js:to-android',message:'theme diagnostic',hypothesisId:hypothesisId||'L',runId:'post-fix',timestamp:Date.now(),data:{theme:document.documentElement.getAttribute('data-theme'),dropZoneBg:dz&&dz.backgroundColor,dropZoneColor:dz&&dz.color,instructionsBg:insS&&insS.backgroundColor,toastColor:toastS&&toastS.color,toastBg:toastS&&toastS.backgroundColor}})}).catch(function(){});
-    }
-    document.addEventListener('DOMContentLoaded', function() { __logToAndroidThemeDiag('L-init'); });
-    (function() {
-      var orig = window.__toggleAirReceiveTheme;
-      window.__toggleAirReceiveTheme = function() {
-        orig();
-        __logToAndroidThemeDiag('L-toggle');
-      };
-    })();
-    // #endregion
-
     function updateDropZoneEnabled() {
       dropZone.classList.toggle('disabled', !selectedPhoneId);
     }
