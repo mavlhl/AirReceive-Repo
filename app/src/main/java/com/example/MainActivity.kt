@@ -1,5 +1,6 @@
 package com.example
 
+import android.app.Application
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
@@ -57,7 +58,10 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.core.content.FileProvider
 import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.repeatOnLifecycle
 import coil.compose.AsyncImage
 import com.example.data.ReceivedPhoto
@@ -204,6 +208,18 @@ fun AirReceiveApp(
     val currentRoute = navBackStackEntry?.destination?.route ?: AppRoute.Gallery
     val needsGatewaySetup = serverState.customUrl.isEmpty()
     val showReceiverHint = !serverState.isRunning
+    val chatViewModel: ChatViewModel = viewModel(
+        factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                return ChatViewModel(
+                    context.applicationContext as Application,
+                    viewModel
+                ) as T
+            }
+        }
+    )
+    val chatUnread by chatViewModel.unreadCount.collectAsStateWithLifecycle()
 
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
@@ -225,6 +241,7 @@ fun AirReceiveApp(
                         .weight(1f)
                         .fillMaxWidth(),
                 viewModel = viewModel,
+                chatViewModel = chatViewModel,
                 serverState = serverState,
                 photoList = photoList,
                 selectedPhotoForView = selectedPhotoForView,
@@ -250,6 +267,17 @@ fun AirReceiveApp(
                             label = "Send",
                             icon = Icons.Default.Send,
                             showBadge = needsGatewaySetup,
+                        ),
+                        MacNavItem(
+                            route = AppRoute.Chat,
+                            label = "Chat",
+                            icon = Icons.Default.Email,
+                            showBadge = needsGatewaySetup || (chatUnread > 0 && currentRoute != AppRoute.Chat),
+                            badgeText = if (chatUnread > 0 && currentRoute != AppRoute.Chat) {
+                                "${chatUnread.coerceAtMost(99)}"
+                            } else {
+                                null
+                            },
                         ),
                         MacNavItem(
                             route = AppRoute.Settings,

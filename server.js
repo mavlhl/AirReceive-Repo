@@ -10,6 +10,8 @@ const MAX_BATCH_FILES = 50;
 const MAX_BATCH_BYTES = 100 * 1024 * 1024; // 100 MB
 const FILE_TTL_MS = 5 * 60 * 1000;
 const TRANSFER_SESSION_TTL_MS = 5 * 60 * 1000;
+const CHAT_TTL_MS = 24 * 60 * 60 * 1000;
+const CHAT_MAX_TEXT_LEN = 2000;
 
 const app = express();
 app.use(express.json());
@@ -32,6 +34,10 @@ const batchMap = new Map();
 const deviceRegistry = new Map();
 // sessionId -> transfer session
 const transferSessions = new Map();
+// messageId -> { messageId, fromDeviceId, toDeviceId, fromDisplayName, text, sentAt }
+const chatMessages = new Map();
+// deviceId -> messageId[]
+const pendingInbox = new Map();
 
 function generatePin() {
   return String(Math.floor(100000 + Math.random() * 900000));
@@ -231,6 +237,135 @@ function relayToTargets(target, targetDeviceId, notification) {
   return true;
 }
 
+function formatChatMessagePayload(msg) {
+  return {
+    type: 'CHAT_MESSAGE',
+    messageId: msg.messageId,
+    fromDeviceId: msg.fromDeviceId,
+    fromDisplayName: msg.fromDisplayName,
+    text: msg.text,
+    sentAt: msg.sentAt
+  };
+}
+
+function purgeExpiredChatMessages() {
+  const now = Date.now();
+  for (const [messageId, msg] of chatMessages.entries()) {
+    if (now - msg.sentAt > CHAT_TTL_MS) {
+      chatMessages.delete(messageId);
+    }
+  }
+  for (const [deviceId, inbox] of pendingInbox.entries()) {
+    const kept = inbox.filter((id) => chatMessages.has(id));
+    if (kept.length === 0) {
+      pendingInbox.delete(deviceId);
+    } else if (kept.length !== inbox.length) {
+      pendingInbox.set(deviceId, kept);
+    }
+  }
+}
+
+function queueChatForDevice(deviceId, messageId) {
+  let inbox = pendingInbox.get(deviceId);
+  if (!inbox) {
+    inbox = [];
+    pendingInbox.set(deviceId, inbox);
+  }
+  inbox.push(messageId);
+}
+
+function flushPendingInbox(deviceId) {
+  const inbox = pendingInbox.get(deviceId);
+  if (!inbox || inbox.length === 0) return;
+  const remaining = [];
+  for (const messageId of inbox) {
+    const msg = chatMessages.get(messageId);
+    if (!msg) continue;
+    const delivered = notifyDevice(deviceId, JSON.stringify(formatChatMessagePayload(msg)));
+    if (!delivered) remaining.push(messageId);
+  }
+  if (remaining.length > 0) {
+    pendingInbox.set(deviceId, remaining);
+  } else {
+    pendingInbox.delete(deviceId);
+  }
+}
+
+function listChatPeers(excludeDeviceId) {
+  const exclude = (excludeDeviceId || '').trim();
+  const peers = [];
+  for (const [id, entry] of deviceRegistry.entries()) {
+    if (entry.ws.readyState !== WebSocket.OPEN) continue;
+    if (exclude && id === exclude) continue;
+    peers.push({
+      id,
+      displayName: entry.displayName,
+      role: entry.role,
+      roleLabel: entry.role === 'phone' ? 'Android' : 'Browser',
+      connectedAt: entry.connectedAt
+    });
+  }
+  peers.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  return peers;
+}
+
+function handleChatSend(ws, msg) {
+  if (!ws.isRegistered || !ws.deviceId) {
+    ws.send(JSON.stringify({ type: 'CHAT_ERROR', error: 'Not registered.' }));
+    return;
+  }
+  const toDeviceId = String(msg.toDeviceId || '').trim();
+  const text = String(msg.text || '').trim();
+  const clientMessageId = msg.clientMessageId || null;
+
+  if (!toDeviceId) {
+    ws.send(JSON.stringify({ type: 'CHAT_ERROR', error: 'Recipient device is required.', clientMessageId }));
+    return;
+  }
+  if (toDeviceId === ws.deviceId) {
+    ws.send(JSON.stringify({ type: 'CHAT_ERROR', error: 'You cannot message your own device.', clientMessageId }));
+    return;
+  }
+  if (!text) {
+    ws.send(JSON.stringify({ type: 'CHAT_ERROR', error: 'Message text cannot be empty.', clientMessageId }));
+    return;
+  }
+  if (text.length > CHAT_MAX_TEXT_LEN) {
+    ws.send(JSON.stringify({
+      type: 'CHAT_ERROR',
+      error: `Message is too long (max ${CHAT_MAX_TEXT_LEN} characters).`,
+      clientMessageId
+    }));
+    return;
+  }
+
+  const senderEntry = deviceRegistry.get(ws.deviceId);
+  const fromDisplayName = senderEntry?.displayName || 'Unknown';
+  const messageId = uuidv4();
+  const sentAt = Date.now();
+  const chatMsg = {
+    messageId,
+    fromDeviceId: ws.deviceId,
+    toDeviceId,
+    fromDisplayName,
+    text,
+    sentAt
+  };
+  chatMessages.set(messageId, chatMsg);
+
+  const delivered = notifyDevice(toDeviceId, JSON.stringify(formatChatMessagePayload(chatMsg)));
+  if (!delivered) {
+    queueChatForDevice(toDeviceId, messageId);
+  }
+
+  ws.send(JSON.stringify({
+    type: 'CHAT_SENT',
+    clientMessageId,
+    messageId,
+    status: delivered ? 'delivered' : 'queued'
+  }));
+}
+
 function listDevices(roleFilter, excludeDeviceId) {
   const exclude = (excludeDeviceId || '').trim();
   const receivers = [];
@@ -278,6 +413,7 @@ function completeRegistration(ws, role, displayName, reconnectDeviceId, password
     }));
   }
   console.log(`[WebSocket] Registered ${role} "${name}" (${deviceId})`);
+  flushPendingInbox(deviceId);
   return deviceId;
 }
 
@@ -316,6 +452,8 @@ function setupDeviceSocket(ws, role, label) {
           ws.passwordProtection = entry.passwordProtection;
           console.log(`[WebSocket] ${ws.deviceId} passwordProtection=${entry.passwordProtection}`);
         }
+      } else if (msg.type === 'CHAT_SEND' && ws.isRegistered) {
+        handleChatSend(ws, msg);
       }
     } catch (e) {
       console.warn(`[WebSocket] Invalid message from ${label}:`, e.message);
@@ -406,6 +544,7 @@ setInterval(() => {
       transferSessions.delete(sessionId);
     }
   }
+  purgeExpiredChatMessages();
 }, 60 * 1000);
 
 // Static assets (e.g. Buy Me a Coffee QR)
@@ -417,6 +556,33 @@ app.get('/api/devices', (req, res) => {
   const exclude = (req.query.exclude || '').trim() || null;
   const lists = listDevices(role, exclude);
   res.json(lists);
+});
+
+app.get('/api/chat/peers', (req, res) => {
+  const exclude = (req.query.exclude || '').trim() || null;
+  res.json({ peers: listChatPeers(exclude) });
+});
+
+app.get('/api/chat/pending/:deviceId', (req, res) => {
+  const deviceId = (req.params.deviceId || '').trim();
+  if (!deviceId) {
+    return res.status(400).json({ error: 'deviceId required' });
+  }
+  const inbox = pendingInbox.get(deviceId) || [];
+  const messages = [];
+  for (const messageId of inbox) {
+    const msg = chatMessages.get(messageId);
+    if (!msg) continue;
+    messages.push({
+      messageId: msg.messageId,
+      fromDeviceId: msg.fromDeviceId,
+      fromDisplayName: msg.fromDisplayName,
+      text: msg.text,
+      sentAt: msg.sentAt
+    });
+  }
+  pendingInbox.delete(deviceId);
+  res.json({ messages });
 });
 
 // Status route for webpages to see connected clients
@@ -1068,21 +1234,690 @@ function macDesignCss(accent = '#007aff') {
   `;
 }
 
+function floatingChatWidgetCss() {
+  return `
+    .ar-chat-fab {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 1000;
+      width: 56px;
+      height: 56px;
+      border-radius: 50%;
+      border: none;
+      background: #34c759;
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.35);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.15s, opacity 0.15s;
+    }
+    .ar-chat-fab:hover { transform: scale(1.05); }
+    .ar-chat-fab.hidden { display: none; }
+    .ar-chat-fab-badge {
+      position: absolute;
+      top: -2px;
+      right: -2px;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 5px;
+      border-radius: 9px;
+      background: #ff3b30;
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      line-height: 18px;
+      text-align: center;
+      display: none;
+    }
+    .ar-chat-fab-badge.visible { display: block; }
+    .ar-chat-panel {
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      z-index: 1001;
+      width: min(380px, calc(100vw - 32px));
+      height: min(520px, calc(100vh - 40px));
+      display: none;
+      flex-direction: column;
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      background: var(--card-bg);
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+      overflow: hidden;
+      backdrop-filter: blur(40px) saturate(180%);
+      -webkit-backdrop-filter: blur(40px) saturate(180%);
+    }
+    .ar-chat-panel.open { display: flex; }
+    .ar-chat-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border-color);
+      background: var(--mac-glass);
+    }
+    .ar-chat-header-title { font-size: 14px; font-weight: 700; }
+    .ar-chat-header-actions { display: flex; gap: 6px; }
+    .ar-chat-header-btn {
+      border: none;
+      background: var(--mac-elevated);
+      color: var(--text-main);
+      border-radius: 8px;
+      padding: 4px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .ar-chat-name-row {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .ar-chat-name-row input {
+      width: 100%;
+      margin: 0;
+      font-size: 13px;
+      padding: 8px 10px;
+    }
+    .ar-chat-status {
+      font-size: 11px;
+      color: var(--text-muted);
+      padding: 0 12px 8px;
+    }
+    .ar-chat-status-dot {
+      display: inline-block;
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      margin-right: 5px;
+      background: #ff3b30;
+      vertical-align: middle;
+    }
+    .ar-chat-status-dot.online { background: #34c759; }
+    .ar-chat-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+    .ar-chat-view { flex: 1; display: none; flex-direction: column; min-height: 0; }
+    .ar-chat-view.active { display: flex; }
+    .ar-chat-view-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border-color);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .ar-chat-peer-list, .ar-chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      min-height: 0;
+    }
+    .ar-chat-peer {
+      display: block;
+      width: 100%;
+      text-align: left;
+      padding: 10px 12px;
+      border: none;
+      border-bottom: 1px solid var(--border-color);
+      background: transparent;
+      color: var(--text-main);
+      cursor: pointer;
+    }
+    .ar-chat-peer:hover { background: var(--mac-tertiary); }
+    .ar-chat-peer-name { font-size: 13px; font-weight: 600; }
+    .ar-chat-peer-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+    .ar-chat-messages {
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .ar-chat-bubble {
+      max-width: 88%;
+      padding: 8px 11px;
+      border-radius: 14px;
+      font-size: 13px;
+      line-height: 1.4;
+      word-break: break-word;
+    }
+    .ar-chat-bubble.in {
+      align-self: flex-start;
+      background: var(--mac-elevated);
+      border: 1px solid var(--border-color);
+    }
+    .ar-chat-bubble.out {
+      align-self: flex-end;
+      background: rgba(52, 199, 89, 0.2);
+      border: 1px solid rgba(52, 199, 89, 0.35);
+    }
+    .ar-chat-bubble-meta { font-size: 10px; color: var(--text-muted); margin-top: 4px; }
+    .ar-chat-empty {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      text-align: center;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .ar-chat-compose {
+      display: flex;
+      gap: 8px;
+      padding: 10px 12px;
+      border-top: 1px solid var(--border-color);
+    }
+    .ar-chat-compose input {
+      flex: 1;
+      margin: 0;
+      font-size: 13px;
+      padding: 8px 10px;
+    }
+    .ar-chat-compose button {
+      flex-shrink: 0;
+      padding: 8px 14px;
+      border-radius: 10px;
+      border: none;
+      background: #34c759;
+      color: #fff;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .ar-chat-compose button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .ar-chat-inline-error {
+      display: none;
+      margin: 0 12px 8px;
+      padding: 8px 10px;
+      border-radius: 10px;
+      font-size: 12px;
+      background: var(--toast-error-bg);
+      color: var(--toast-error-text);
+    }
+    .ar-chat-inline-error.visible { display: block; }
+  `;
+}
+
+function floatingChatWidgetHtml() {
+  return `
+  <button type="button" class="ar-chat-fab" id="arChatFab" aria-label="Open chat">
+    Chat
+    <span class="ar-chat-fab-badge" id="arChatFabBadge"></span>
+  </button>
+  <div class="ar-chat-panel" id="arChatPanel" aria-label="Direct messages">
+    <div class="ar-chat-header">
+      <span class="ar-chat-header-title">Direct messages</span>
+      <div class="ar-chat-header-actions">
+        <button type="button" class="ar-chat-header-btn" id="arChatMinimizeBtn">−</button>
+      </div>
+    </div>
+    <div class="ar-chat-name-row">
+      <input type="text" id="arChatDeviceName" placeholder="Your name" maxlength="64" />
+    </div>
+    <div class="ar-chat-status">
+      <span class="ar-chat-status-dot" id="arChatWsDot"></span>
+      <span id="arChatWsStatus">Connecting...</span>
+    </div>
+    <div class="ar-chat-inline-error" id="arChatError"></div>
+    <div class="ar-chat-body">
+      <div class="ar-chat-view active" id="arChatPeersView">
+        <div class="ar-chat-view-header">
+          <span>Online</span>
+          <button type="button" class="ar-chat-header-btn" id="arChatRefreshPeersBtn">Refresh</button>
+        </div>
+        <div class="ar-chat-peer-list" id="arChatPeerList">
+          <div class="ar-chat-empty">Looking for peers...</div>
+        </div>
+      </div>
+      <div class="ar-chat-view" id="arChatThreadView">
+        <div class="ar-chat-view-header">
+          <button type="button" class="ar-chat-header-btn" id="arChatBackBtn">← Peers</button>
+          <span id="arChatThreadTitle">Chat</span>
+        </div>
+        <div class="ar-chat-messages" id="arChatMessageList"></div>
+        <div class="ar-chat-compose">
+          <input type="text" id="arChatMessageInput" placeholder="Type a message..." maxlength="2000" disabled />
+          <button type="button" id="arChatSendBtn" disabled>Send</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  `;
+}
+
+function floatingChatWidgetScript() {
+  return `
+(function() {
+  const DEVICE_ID_KEY = 'airreceive_device_id';
+  const DEVICE_NAME_KEY = 'airreceive_chat_device_name';
+  const HISTORY_KEY = 'airreceive_chat_history';
+
+  let opts = {};
+  let ws = null;
+  let myDeviceId = localStorage.getItem(DEVICE_ID_KEY) || null;
+  let selectedPeer = null;
+  let peers = [];
+  let reconnectTimer = null;
+  let unreadWhileClosed = 0;
+  let panelOpen = false;
+
+  const fab = document.getElementById('arChatFab');
+  const fabBadge = document.getElementById('arChatFabBadge');
+  const panel = document.getElementById('arChatPanel');
+  const nameInput = document.getElementById('arChatDeviceName');
+  const wsDot = document.getElementById('arChatWsDot');
+  const wsStatus = document.getElementById('arChatWsStatus');
+  const errorEl = document.getElementById('arChatError');
+  const peerList = document.getElementById('arChatPeerList');
+  const refreshPeersBtn = document.getElementById('arChatRefreshPeersBtn');
+  const peersView = document.getElementById('arChatPeersView');
+  const threadView = document.getElementById('arChatThreadView');
+  const threadTitle = document.getElementById('arChatThreadTitle');
+  const messageList = document.getElementById('arChatMessageList');
+  const messageInput = document.getElementById('arChatMessageInput');
+  const sendBtn = document.getElementById('arChatSendBtn');
+  const backBtn = document.getElementById('arChatBackBtn');
+  const minimizeBtn = document.getElementById('arChatMinimizeBtn');
+
+  function getDeviceName() {
+    return (nameInput && nameInput.value.trim()) ||
+      localStorage.getItem(DEVICE_NAME_KEY) ||
+      localStorage.getItem('airreceive_device_name') ||
+      localStorage.getItem('airreceive_receiver_name') ||
+      'Browser';
+  }
+
+  function wsUrl() {
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    return proto + '//' + location.host + '/ws/receiver';
+  }
+
+  function getActiveWs() {
+    if (opts.getExternalWs) {
+      const external = opts.getExternalWs();
+      if (external && external.readyState === WebSocket.OPEN) return external;
+    }
+    return ws && ws.readyState === WebSocket.OPEN ? ws : null;
+  }
+
+  function usesExternalWs() {
+    return typeof opts.getExternalWs === 'function';
+  }
+
+  function showChatError(msg) {
+    if (!errorEl) return;
+    errorEl.textContent = msg;
+    errorEl.classList.add('visible');
+    setTimeout(function() { errorEl.classList.remove('visible'); }, 5000);
+  }
+
+  function setConnected(online) {
+    if (!wsDot || !wsStatus) return;
+    wsDot.classList.toggle('online', online);
+    wsStatus.textContent = online ? 'Connected' : 'Disconnected — reconnecting...';
+  }
+
+  function updateFabBadge() {
+    if (!fabBadge) return;
+    if (unreadWhileClosed > 0 && !panelOpen) {
+      fabBadge.textContent = String(Math.min(unreadWhileClosed, 99));
+      fabBadge.classList.add('visible');
+    } else {
+      fabBadge.classList.remove('visible');
+    }
+  }
+
+  function openPanel() {
+    panelOpen = true;
+    unreadWhileClosed = 0;
+    updateFabBadge();
+    if (panel) panel.classList.add('open');
+    if (fab) fab.classList.add('hidden');
+    showPeersView();
+    refreshPeers();
+  }
+
+  function closePanel() {
+    panelOpen = false;
+    if (panel) panel.classList.remove('open');
+    if (fab) fab.classList.remove('hidden');
+  }
+
+  function showPeersView() {
+    if (peersView) peersView.classList.add('active');
+    if (threadView) threadView.classList.remove('active');
+    selectedPeer = null;
+    messageInput.disabled = true;
+    sendBtn.disabled = true;
+    renderThread();
+  }
+
+  function showThreadView(peer) {
+    selectedPeer = peer;
+    if (peersView) peersView.classList.remove('active');
+    if (threadView) threadView.classList.add('active');
+    threadTitle.textContent = peer.displayName + ' · ' + (peer.roleLabel || peer.role || 'Device');
+    messageInput.disabled = false;
+    sendBtn.disabled = false;
+    renderThread();
+  }
+
+  function loadHistory() {
+    try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '{}'); }
+    catch (e) { return {}; }
+  }
+
+  function saveHistory(history) {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  }
+
+  function appendMessage(peerId, msg) {
+    const history = loadHistory();
+    if (!history[peerId]) history[peerId] = [];
+    const exists = history[peerId].some(function(m) {
+      return m.messageId && msg.messageId && m.messageId === msg.messageId;
+    });
+    if (!exists) {
+      history[peerId].push(msg);
+      saveHistory(history);
+    }
+  }
+
+  function formatTime(ts) {
+    const d = new Date(ts);
+    return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function renderThread() {
+    if (!messageList) return;
+    messageList.innerHTML = '';
+    if (!selectedPeer) return;
+    const msgs = loadHistory()[selectedPeer.id] || [];
+    if (msgs.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'ar-chat-empty';
+      empty.textContent = 'No messages yet. Say hello!';
+      messageList.appendChild(empty);
+      return;
+    }
+    msgs.forEach(function(msg) {
+      const bubble = document.createElement('div');
+      bubble.className = 'ar-chat-bubble ' + (msg.direction === 'out' ? 'out' : 'in');
+      bubble.textContent = msg.text;
+      const meta = document.createElement('div');
+      meta.className = 'ar-chat-bubble-meta';
+      meta.textContent = formatTime(msg.sentAt) + (msg.status === 'queued' ? ' · queued' : '');
+      bubble.appendChild(meta);
+      messageList.appendChild(bubble);
+    });
+    messageList.scrollTop = messageList.scrollHeight;
+  }
+
+  function renderPeers() {
+    if (!peerList) return;
+    if (peers.length === 0) {
+      peerList.innerHTML = '<div class="ar-chat-empty">No one else online — open AirReceive on another device.</div>';
+      return;
+    }
+    peerList.innerHTML = '';
+    peers.forEach(function(peer) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ar-chat-peer';
+      btn.innerHTML = '<div class="ar-chat-peer-name">' + escapeHtml(peer.displayName) + '</div>' +
+        '<div class="ar-chat-peer-meta">' + escapeHtml(peer.roleLabel || peer.role || 'Device') + ' · online</div>';
+      btn.addEventListener('click', function() { showThreadView(peer); });
+      peerList.appendChild(btn);
+    });
+  }
+
+  async function refreshPeers() {
+    try {
+      const qs = myDeviceId ? '?exclude=' + encodeURIComponent(myDeviceId) : '';
+      const res = await fetch('/api/chat/peers' + qs);
+      const data = await res.json();
+      peers = (data.peers || []).filter(function(p) { return p.id !== myDeviceId; });
+      renderPeers();
+    } catch (e) {
+      if (peerList) peerList.innerHTML = '<div class="ar-chat-empty">Could not load peers.</div>';
+    }
+  }
+
+  async function pollPending() {
+    if (!myDeviceId) return;
+    try {
+      const res = await fetch('/api/chat/pending/' + encodeURIComponent(myDeviceId));
+      const data = await res.json();
+      (data.messages || []).forEach(handleIncomingMessage);
+    } catch (e) { /* ignore */ }
+  }
+
+  function handleIncomingMessage(msg) {
+    const peerId = msg.fromDeviceId;
+    appendMessage(peerId, {
+      messageId: msg.messageId,
+      direction: 'in',
+      text: msg.text,
+      sentAt: msg.sentAt,
+      fromDisplayName: msg.fromDisplayName
+    });
+    if (!panelOpen || !selectedPeer || selectedPeer.id !== peerId) {
+      unreadWhileClosed += 1;
+      updateFabBadge();
+      if (panelOpen) openPanel();
+    }
+    if (selectedPeer && selectedPeer.id === peerId) renderThread();
+  }
+
+  function sendMessage() {
+    const activeWs = getActiveWs();
+    if (!selectedPeer || !activeWs) {
+      showChatError('Not connected to gateway.');
+      return;
+    }
+    const text = messageInput.value.trim();
+    if (!text) return;
+    const clientMessageId = 'c-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    appendMessage(selectedPeer.id, {
+      clientMessageId: clientMessageId,
+      messageId: clientMessageId,
+      direction: 'out',
+      text: text,
+      sentAt: Date.now(),
+      status: 'sending'
+    });
+    renderThread();
+    messageInput.value = '';
+    activeWs.send(JSON.stringify({
+      type: 'CHAT_SEND',
+      toDeviceId: selectedPeer.id,
+      text: text,
+      clientMessageId: clientMessageId
+    }));
+  }
+
+  function updateOutgoingStatus(clientMessageId, messageId, status) {
+    if (!selectedPeer) return;
+    const history = loadHistory();
+    const msgs = history[selectedPeer.id] || [];
+    const idx = msgs.findIndex(function(m) { return m.clientMessageId === clientMessageId; });
+    if (idx >= 0) {
+      msgs[idx].messageId = messageId || msgs[idx].messageId;
+      msgs[idx].status = status;
+      saveHistory(history);
+      renderThread();
+    }
+  }
+
+  function connect() {
+    if (usesExternalWs()) {
+      const external = opts.getExternalWs();
+      setConnected(!!(external && external.readyState === WebSocket.OPEN));
+      if (opts.getMyDeviceId) {
+        const id = opts.getMyDeviceId();
+        if (id) {
+          myDeviceId = id;
+          pollPending();
+          refreshPeers();
+        }
+      }
+      return;
+    }
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (ws) {
+      try { ws.close(); } catch (e) { /* ignore */ }
+      ws = null;
+    }
+    ws = new WebSocket(wsUrl());
+    ws.onopen = function() {
+      setConnected(true);
+      ws.send(JSON.stringify({
+        type: 'REGISTER',
+        displayName: getDeviceName(),
+        deviceId: myDeviceId || undefined
+      }));
+    };
+    ws.onclose = function() {
+      setConnected(false);
+      reconnectTimer = setTimeout(connect, 3000);
+    };
+    ws.onerror = function() { setConnected(false); };
+    ws.onmessage = function(ev) {
+      let msg;
+      try { msg = JSON.parse(ev.data); } catch (e) { return; }
+      handleWsMessage(msg);
+    };
+  }
+
+  function handleWsMessage(msg) {
+    if (msg.type === 'REGISTERED') {
+      myDeviceId = msg.deviceId;
+      localStorage.setItem(DEVICE_ID_KEY, myDeviceId);
+      pollPending();
+      refreshPeers();
+      return;
+    }
+    if (msg.type === 'CHAT_MESSAGE') {
+      handleIncomingMessage(msg);
+      return;
+    }
+    if (msg.type === 'CHAT_SENT') {
+      updateOutgoingStatus(msg.clientMessageId, msg.messageId, msg.status);
+      return;
+    }
+    if (msg.type === 'CHAT_ERROR') {
+      showChatError(msg.error || 'Chat error');
+    }
+  }
+
+  function bindUi() {
+    if (nameInput) {
+      nameInput.value = getDeviceName();
+      nameInput.addEventListener('change', function() {
+        localStorage.setItem(DEVICE_NAME_KEY, nameInput.value.trim());
+        const activeWs = getActiveWs();
+        if (activeWs && !usesExternalWs()) {
+          activeWs.send(JSON.stringify({
+            type: 'REGISTER',
+            displayName: getDeviceName(),
+            deviceId: myDeviceId || undefined
+          }));
+        }
+      });
+    }
+    if (fab) fab.addEventListener('click', openPanel);
+    if (minimizeBtn) minimizeBtn.addEventListener('click', closePanel);
+    if (backBtn) backBtn.addEventListener('click', showPeersView);
+    if (refreshPeersBtn) refreshPeersBtn.addEventListener('click', refreshPeers);
+    if (sendBtn) sendBtn.addEventListener('click', sendMessage);
+    if (messageInput) {
+      messageInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendMessage();
+        }
+      });
+    }
+    document.querySelectorAll('.ar-chat-nav-open').forEach(function(el) {
+      el.addEventListener('click', function(e) {
+        e.preventDefault();
+        openPanel();
+      });
+    });
+  }
+
+  window.AirReceiveFloatingChat = {
+    init: function(options) {
+      opts = options || {};
+      bindUi();
+      connect();
+      setInterval(refreshPeers, 3000);
+      if (usesExternalWs()) {
+        setInterval(function() {
+          const external = opts.getExternalWs();
+          setConnected(!!(external && external.readyState === WebSocket.OPEN));
+        }, 2000);
+      }
+      if (opts.openOnLoad) openPanel();
+    },
+    open: openPanel,
+    close: closePanel,
+    handleWsMessage: handleWsMessage,
+    onRegistered: function(deviceId) {
+      myDeviceId = deviceId;
+      pollPending();
+      refreshPeers();
+    }
+  };
+})();
+  `;
+}
+
+function floatingChatPageTail(openOnLoad, skipAutoInit) {
+  const openFlag = openOnLoad ? 'true' : 'false';
+  const bootScript = skipAutoInit ? '' : `
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  if (window.AirReceiveFloatingChat) {
+    AirReceiveFloatingChat.init({ openOnLoad: ${openFlag} });
+  }
+});
+</script>
+  `;
+  return `
+${floatingChatWidgetHtml()}
+<script>${floatingChatWidgetScript()}</script>
+${bootScript}
+  `;
+}
+
 function gatewayNavHtml(activeNav) {
   const items = [
     { key: 'home', href: '/', label: 'Home' },
     { key: 'android', href: '/to-android', label: 'Send to Android' },
     { key: 'send', href: '/send', label: 'Send to device' },
     { key: 'receive', href: '/receive', label: 'Receive' },
+    { key: 'chat', href: '#', label: 'Chat', openChat: true },
     { key: 'support', href: '/support', label: 'Support' }
   ];
   return '<nav class="gateway-nav">' + items.map((item) => {
     const cls = item.key === activeNav ? 'gateway-nav-link active' : 'gateway-nav-link';
-    return '<a class="' + cls + '" href="' + item.href + '">' + item.label + '</a>';
+    const chatCls = item.openChat ? ' ar-chat-nav-open' : '';
+    return '<a class="' + cls + chatCls + '" href="' + item.href + '">' + item.label + '</a>';
   }).join('') + '</nav>';
 }
 
-function gatewayPageHtml({ title, activeNav, accent = '#007aff', extraCss = '', bodyHtml }) {
+function gatewayPageHtml({ title, activeNav, accent = '#007aff', extraCss = '', bodyHtml, openChatOnLoad = false }) {
   return `<!DOCTYPE html>
 <html lang="en" data-theme="dark">
 <head>
@@ -1093,6 +1928,7 @@ function gatewayPageHtml({ title, activeNav, accent = '#007aff', extraCss = '', 
   <script>${macThemeBootScript()}</script>
   <style>
     ${macDesignCss(accent)}
+    ${floatingChatWidgetCss()}
     ${extraCss}
   </style>
 </head>
@@ -1103,6 +1939,7 @@ function gatewayPageHtml({ title, activeNav, accent = '#007aff', extraCss = '', 
       ${bodyHtml}
     </div>
   </div>
+  ${floatingChatPageTail(openChatOnLoad)}
 </body>
 </html>`;
 }
@@ -1119,10 +1956,12 @@ function macStandaloneChromeEnd() {
 
 // Hub — pick an action (no upload on this page)
 app.get('/', (req, res) => {
+  const openChatOnLoad = req.query.chat === 'open';
   res.send(gatewayPageHtml({
     title: 'AirReceive Gateway',
     activeNav: 'home',
     accent: '#007aff',
+    openChatOnLoad,
     extraCss: `
     .hub-card {
       display: block;
@@ -1159,6 +1998,10 @@ app.get('/', (req, res) => {
       <a class="hub-card" href="/receive">
         <strong>Receive files</strong>
         <span>Stay on this page to receive files sent from another device or Android.</span>
+      </a>
+      <a class="hub-card ar-chat-nav-open" href="#">
+        <strong>Direct messages</strong>
+        <span>Text chat with any online Android phone or browser on this gateway.</span>
       </a>
       <a class="hub-card" href="/support">
         <strong>Support Maverick</strong>
@@ -1238,6 +2081,7 @@ app.get('/to-android', (req, res) => {
   <script>${macThemeBootScript()}</script>
   <style>
     ${macDesignCss('#30d158')}
+    ${floatingChatWidgetCss()}
 
     .to-android-card {
       backdrop-filter: blur(40px) saturate(180%);
@@ -1765,6 +2609,7 @@ app.get('/to-android', (req, res) => {
   </script>
   </div>
   </div>
+  ${floatingChatPageTail(false)}
 </body>
 </html>
   `);
@@ -1787,6 +2632,7 @@ app.get('/send', (req, res) => {
   <script>${macThemeBootScript()}</script>
   <style>
     ${macDesignCss('#007aff')}
+    ${floatingChatWidgetCss()}
     .card {
       padding: 32px;
       backdrop-filter: blur(40px) saturate(180%);
@@ -2004,9 +2850,14 @@ app.get('/send', (req, res) => {
   </script>
   </div>
   </div>
+  ${floatingChatPageTail(false)}
 </body>
 </html>
   `);
+});
+
+app.get('/chat', (req, res) => {
+  res.redirect('/?chat=open');
 });
 
 // iPhone / Safari receive page
@@ -2022,6 +2873,7 @@ app.get('/receive', (req, res) => {
   <script>${macThemeBootScript()}</script>
   <style>
     ${macDesignCss('#007aff')}
+    ${floatingChatWidgetCss()}
     .card {
       padding: 32px;
       text-align: center;
@@ -2190,7 +3042,7 @@ app.get('/receive', (req, res) => {
       position: fixed;
       inset: 0;
       background: rgba(0,0,0,0.55);
-      z-index: 500;
+      z-index: 2000;
       align-items: center;
       justify-content: center;
       padding: 16px;
@@ -2215,6 +3067,23 @@ app.get('/receive', (req, res) => {
       padding: 12px;
       margin-bottom: 12px;
     }
+    .auth-card input.auth-input-error {
+      border-color: var(--toast-error-text);
+      box-shadow: 0 0 0 2px rgba(255, 69, 58, 0.25);
+    }
+    .auth-error {
+      display: none;
+      margin: 0 0 12px;
+      padding: 10px 12px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 600;
+      text-align: center;
+      background: var(--toast-error-bg);
+      color: var(--toast-error-text);
+      border: 1px solid var(--toast-error-text);
+    }
+    .auth-error.visible { display: block; }
     .auth-card .auth-actions { display: flex; gap: 8px; justify-content: center; }
   </style>
 </head>
@@ -2269,6 +3138,7 @@ app.get('/receive', (req, res) => {
           <h2>Incoming transfer</h2>
           <p id="authSenderHint">A sender wants to send files. Enter the code shown on their device.</p>
           <input type="text" id="authPinInput" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code" />
+          <div class="auth-error" id="authError" role="alert"></div>
           <div class="auth-actions">
             <button type="button" class="utility-btn" id="authCancelBtn">Cancel</button>
             <button type="button" class="save-all-btn" id="authConfirmBtn">Confirm</button>
@@ -2317,6 +3187,7 @@ app.get('/receive', (req, res) => {
     const passwordProtectionToggle = document.getElementById('passwordProtectionToggle');
     const authModal = document.getElementById('authModal');
     const authPinInput = document.getElementById('authPinInput');
+    const authError = document.getElementById('authError');
     const authSenderHint = document.getElementById('authSenderHint');
     const authConfirmBtn = document.getElementById('authConfirmBtn');
     const authCancelBtn = document.getElementById('authCancelBtn');
@@ -2332,10 +3203,27 @@ app.get('/receive', (req, res) => {
       }
     });
 
+    function showAuthError(msg) {
+      if (!authError) return;
+      authError.textContent = msg;
+      authError.classList.add('visible');
+      authPinInput.classList.add('auth-input-error');
+      authPinInput.focus();
+      authPinInput.select();
+    }
+
+    function clearAuthError() {
+      if (!authError) return;
+      authError.textContent = '';
+      authError.classList.remove('visible');
+      authPinInput.classList.remove('auth-input-error');
+    }
+
     function showAuthModal(sessionId, senderLabel) {
       pendingAuthSessionId = sessionId;
       authSenderHint.textContent = (senderLabel || 'A sender') + ' wants to send files. Enter the code shown on the Android sender.';
       authPinInput.value = '';
+      clearAuthError();
       authModal.classList.add('visible');
       authPinInput.focus();
     }
@@ -2358,6 +3246,7 @@ app.get('/receive', (req, res) => {
       authModal.classList.remove('visible');
       pendingAuthSessionId = null;
       authPinInput.value = '';
+      clearAuthError();
     }
 
     authCancelBtn.addEventListener('click', hideAuthModal);
@@ -2366,9 +3255,10 @@ app.get('/receive', (req, res) => {
       if (!pendingAuthSessionId) return;
       const pin = authPinInput.value.trim();
       if (!pin) {
-        showError('Enter the 6-digit code.');
+        showAuthError('Enter the 6-digit code.');
         return;
       }
+      clearAuthError();
       try {
         const res = await fetch('/api/transfer/verify', {
           method: 'POST',
@@ -2381,13 +3271,19 @@ app.get('/receive', (req, res) => {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          showError(data.error || 'Incorrect code.');
+          showAuthError(data.error || 'Incorrect code. Check the code on the sender and try again.');
           return;
         }
         hideAuthModal();
         showSuccess('Code accepted — receiving files...');
       } catch (e) {
-        showError('Could not verify code: ' + (e.message || 'network error'));
+        showAuthError('Could not verify code: ' + (e.message || 'network error'));
+      }
+    });
+
+    authPinInput.addEventListener('input', () => {
+      if (authError && authError.classList.contains('visible')) {
+        clearAuthError();
       }
     });
 
@@ -2815,11 +3711,20 @@ app.get('/receive', (req, res) => {
               passwordProtectionToggle.checked = msg.passwordProtection;
               localStorage.setItem(PASSWORD_PROTECTION_KEY, msg.passwordProtection ? '1' : '0');
             }
+            if (window.AirReceiveFloatingChat) {
+              AirReceiveFloatingChat.onRegistered(msg.deviceId);
+            }
             pollPendingAuth();
             return;
           }
           if (msg.type === 'AUTH_REQUIRED') {
             showAuthModal(msg.sessionId, msg.senderLabel);
+            return;
+          }
+          if (msg.type === 'CHAT_MESSAGE' || msg.type === 'CHAT_SENT' || msg.type === 'CHAT_ERROR') {
+            if (window.AirReceiveFloatingChat) {
+              AirReceiveFloatingChat.handleWsMessage(msg);
+            }
             return;
           }
           if (msg.type === 'NOTIFY_BATCH') {
@@ -2845,9 +3750,19 @@ app.get('/receive', (req, res) => {
     setInterval(() => {
       if (!document.hidden) pollPendingAuth();
     }, 2000);
+
+    document.addEventListener('DOMContentLoaded', function() {
+      if (window.AirReceiveFloatingChat) {
+        AirReceiveFloatingChat.init({
+          getExternalWs: function() { return ws; },
+          getMyDeviceId: function() { return myDeviceId; }
+        });
+      }
+    });
   </script>
   </div>
   </div>
+  ${floatingChatPageTail(false, true)}
 </body>
 </html>
   `);

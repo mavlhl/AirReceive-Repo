@@ -59,6 +59,7 @@ The app uses a bottom navigation bar:
 |-----|---------|
 | **Home** (gallery) | View received files; **Save all** or per-image **Save to Photos**; tap to preview |
 | **Send** | **Default:** free cloud gateway — pick online receiver; **Local Wi‑Fi only** (Settings): send via peer portal URL |
+| **Chat** | **Direct messages** — 1:1 text chat with any online device on the gateway (requires gateway URL) |
 | **Settings** | Start/stop receiver; local mode shows compact QR help + optional gateway expander; link to Support |
 | **Support** | Thank Maverick — Buy Me a Coffee button and QR code |
 
@@ -66,10 +67,11 @@ The app uses a bottom navigation bar:
 
 | URL | Purpose |
 |-----|---------|
-| `https://your-app.onrender.com/` | **Hub** — choose Send to Android, Send to device, Receive, or Support |
+| `https://your-app.onrender.com/` | **Hub** — choose Send to Android, Send to device, Receive, Chat, or Support |
 | `https://your-app.onrender.com/to-android` | Send a photo **to a chosen Android phone** (device picker) |
 | `https://your-app.onrender.com/send` | Send files **to a chosen PC or phone** (device picker) |
 | `https://your-app.onrender.com/receive` | **Receive** files (keep the tab open; set a device name when prompted) |
+| `https://your-app.onrender.com/chat` | Opens the **floating chat** panel (redirects to home with chat open) |
 | `https://your-app.onrender.com/support` | **Support Maverick** — Buy Me a Coffee link and donation QR code |
 
 Uploads use `POST /upload` or `POST /upload/batch` with form field `target`: `phone` (to Android) or `receiver` (to `/receive`). Optional `targetDeviceId` sends only to one registered device (see `GET /api/devices`).
@@ -92,6 +94,18 @@ Uploads use `POST /upload` or `POST /upload/batch` with form field `target`: `ph
 Android uploads via `POST /upload/batch` with `target=receiver` and `targetDeviceId`. The web `/send` page uses the same API. Cleanup: `DELETE /batch/:batchId` after save.
 
 **Limits:** Gateway sends from Android (or the web `/send` page) accept any number of files; large selections are auto-split into upload batches of up to 50 files or 100 MB each. The receiver page accumulates all chunks into one combined batch. Local Wi‑Fi send still uses a 20-file cap per batch. Images preview on `/receive`; PDF, ZIP, and other types download without a thumbnail. Use **Safari** on iPhone for Share-to-Photos when the batch is images only.
+
+### Direct messages (gateway chat)
+
+Text-only **1:1 direct messages** between any online devices on the same gateway (Android app, iPhone Safari, laptop browser). File transfers still use **Send** / **Receive**; chat is separate.
+
+**Android:** Open the **Chat** tab (between Send and Settings). The free hosted gateway is enabled automatically, same as Send. Pick an online peer, type a message, and tap **Send**. Chat history is stored **locally on your phone** (Room). An unread badge appears on the Chat tab when messages arrive while you are on another tab.
+
+**Browser:** Open any gateway page (`/`, `/receive`, `/send`, etc.) and click the green **Chat** button in the bottom-right corner, or use **Chat** in the top nav. History is saved in **localStorage** on that browser only.
+
+**Delivery:** Messages deliver instantly when the recipient is connected to the gateway WebSocket. If they are offline, the gateway queues messages for up to **24 hours** and delivers them when they reconnect (`REGISTER` flush + `GET /api/chat/pending/:deviceId` fallback).
+
+**Rules:** Text only (max ~2000 characters); no group chat; you cannot message your own device. The server does **not** store long-term chat history — only the offline queue with a 24h TTL.
 
 ### Optional transfer password
 
@@ -146,7 +160,7 @@ npm install
 npm start
 ```
 
-The server listens on port `8080` by default (override with the `PORT` environment variable). Open `http://localhost:8080` for the hub, then use `/to-android`, `/send`, or `/receive` as needed. Point the Android app’s gateway URL in **Settings** at the same base address when testing.
+The server listens on port `8080` by default (override with the `PORT` environment variable). Open `http://localhost:8080` for the hub, then use `/to-android`, `/send`, `/receive`, or `/chat` as needed. Point the Android app’s gateway URL in **Settings** at the same base address when testing.
 
 Uploaded files are stored under `/tmp/airreceive_uploads` and expire after about five minutes if not downloaded.
 

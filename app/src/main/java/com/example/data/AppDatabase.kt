@@ -5,9 +5,10 @@ import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
 
-@Database(entities = [ReceivedPhoto::class], version = 1, exportSchema = false)
+@Database(entities = [ReceivedPhoto::class, ChatMessage::class], version = 2, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
     abstract fun photoDao(): PhotoDao
+    abstract fun chatDao(): ChatDao
 
     companion object {
         @Volatile

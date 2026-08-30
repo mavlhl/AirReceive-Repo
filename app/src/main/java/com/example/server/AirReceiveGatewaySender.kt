@@ -19,6 +19,21 @@ data class GatewayReceiverDevice(
     val displayName: String,
     val passwordProtection: Boolean = false,
     val role: String = "receiver"
+) {
+    val roleLabel: String
+        get() = when (role) {
+            "phone" -> "Android"
+            "receiver" -> "Browser"
+            else -> role.replaceFirstChar { it.uppercase() }
+        }
+}
+
+data class GatewayChatMessage(
+    val messageId: String,
+    val fromDeviceId: String,
+    val fromDisplayName: String,
+    val text: String,
+    val sentAt: Long
 )
 
 class AirReceiveGatewaySender(
@@ -123,6 +138,69 @@ class AirReceiveGatewaySender(
 
     fun fetchOnlinePhones(excludeDeviceId: String? = null): List<GatewayReceiverDevice> =
         fetchDevicesByRole("phone", "phones", excludeDeviceId)
+
+    fun fetchChatPeers(excludeDeviceId: String? = null): List<GatewayReceiverDevice> {
+        val excludeQuery = if (!excludeDeviceId.isNullOrBlank()) {
+            "?exclude=${java.net.URLEncoder.encode(excludeDeviceId, "UTF-8")}"
+        } else {
+            ""
+        }
+        val url = "${gatewayBaseUrl()}/api/chat/peers$excludeQuery"
+        val request = Request.Builder().url(url).get().build()
+        return try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return emptyList()
+                val bodyText = response.body?.string().orEmpty()
+                val json = JSONObject(bodyText)
+                val peers = json.optJSONArray("peers") ?: JSONArray()
+                buildList {
+                    for (i in 0 until peers.length()) {
+                        val item = peers.getJSONObject(i)
+                        add(
+                            GatewayReceiverDevice(
+                                id = item.getString("id"),
+                                displayName = item.optString("displayName", "Device"),
+                                role = item.optString("role", "receiver")
+                            )
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("AirReceiveGatewaySender", "Failed to fetch chat peers", e)
+            emptyList()
+        }
+    }
+
+    fun fetchPendingChat(deviceId: String): List<GatewayChatMessage> {
+        val url = "${gatewayBaseUrl()}/api/chat/pending/${java.net.URLEncoder.encode(deviceId, "UTF-8")}"
+        val request = Request.Builder().url(url).get().build()
+        return try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return emptyList()
+                val bodyText = response.body?.string().orEmpty()
+                val json = JSONObject(bodyText)
+                val messages = json.optJSONArray("messages") ?: JSONArray()
+                buildList {
+                    for (i in 0 until messages.length()) {
+                        val item = messages.getJSONObject(i)
+                        add(
+                            GatewayChatMessage(
+                                messageId = item.getString("messageId"),
+                                fromDeviceId = item.getString("fromDeviceId"),
+                                fromDisplayName = item.optString("fromDisplayName", "Device"),
+                                text = item.getString("text"),
+                                sentAt = item.optLong("sentAt", System.currentTimeMillis())
+                            )
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("AirReceiveGatewaySender", "Failed to fetch pending chat", e)
+            emptyList()
+        }
+    }
 
     private fun fetchDevicesByRole(
         role: String,

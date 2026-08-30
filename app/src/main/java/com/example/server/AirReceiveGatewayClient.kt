@@ -17,6 +17,9 @@ class AirReceiveGatewayClient(
     private var passwordProtection: Boolean = false,
     private val onRegistered: ((deviceId: String, displayName: String) -> Unit)? = null,
     private val onAuthRequired: ((sessionId: String, senderLabel: String?) -> Unit)? = null,
+    private val onChatMessage: ((messageId: String, fromDeviceId: String, fromDisplayName: String, text: String, sentAt: Long) -> Unit)? = null,
+    private val onChatSent: ((clientMessageId: String?, messageId: String, status: String) -> Unit)? = null,
+    private val onChatError: ((error: String, clientMessageId: String?) -> Unit)? = null,
     private val onTransferStarted: (fileName: String, fileSize: Long) -> Unit,
     private val onTransferProgress: (bytesRead: Long, totalBytes: Long) -> Unit,
     private val onTransferCompleted: (
@@ -56,6 +59,53 @@ class AirReceiveGatewayClient(
             put("type", "SET_PASSWORD_PROTECTION")
             put("passwordProtection", enabled)
         }.toString())
+    }
+
+    fun sendChatMessage(toDeviceId: String, text: String, clientMessageId: String) {
+        webSocket?.send(JSONObject().apply {
+            put("type", "CHAT_SEND")
+            put("toDeviceId", toDeviceId)
+            put("text", text)
+            put("clientMessageId", clientMessageId)
+        }.toString())
+    }
+
+    private fun pollPendingChat(deviceId: String) {
+        val cleanUrl = if (serverUrl.startsWith("http://") || serverUrl.startsWith("https://")) {
+            serverUrl.removeSuffix("/")
+        } else {
+            "https://" + serverUrl.removeSuffix("/")
+        }
+        val url = "$cleanUrl/api/chat/pending/${java.net.URLEncoder.encode(deviceId, "UTF-8")}"
+        val request = Request.Builder().url(url).get().build()
+        client.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, e: IOException) {
+                Log.w("AirReceiveGateway", "Pending chat poll failed", e)
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    if (!it.isSuccessful) return
+                    val bodyText = it.body?.string().orEmpty()
+                    try {
+                        val json = JSONObject(bodyText)
+                        val messages = json.optJSONArray("messages") ?: return
+                        for (i in 0 until messages.length()) {
+                            val item = messages.getJSONObject(i)
+                            onChatMessage?.invoke(
+                                item.getString("messageId"),
+                                item.getString("fromDeviceId"),
+                                item.optString("fromDisplayName", "Device"),
+                                item.getString("text"),
+                                item.optLong("sentAt", System.currentTimeMillis())
+                            )
+                        }
+                    } catch (e: Exception) {
+                        Log.e("AirReceiveGateway", "Error parsing pending chat", e)
+                    }
+                }
+            }
+        })
     }
 
     private fun connect() {
@@ -98,7 +148,33 @@ class AirReceiveGatewayClient(
                         Log.d("AirReceiveGateway", "Registered as $name ($deviceId)")
                         if (deviceId.isNotEmpty()) {
                             onRegistered?.invoke(deviceId, name)
+                            pollPendingChat(deviceId)
                         }
+                        return
+                    }
+                    if (type == "CHAT_MESSAGE") {
+                        onChatMessage?.invoke(
+                            json.getString("messageId"),
+                            json.getString("fromDeviceId"),
+                            json.optString("fromDisplayName", "Device"),
+                            json.getString("text"),
+                            json.optLong("sentAt", System.currentTimeMillis())
+                        )
+                        return
+                    }
+                    if (type == "CHAT_SENT") {
+                        onChatSent?.invoke(
+                            json.optString("clientMessageId").ifEmpty { null },
+                            json.optString("messageId"),
+                            json.optString("status", "delivered")
+                        )
+                        return
+                    }
+                    if (type == "CHAT_ERROR") {
+                        onChatError?.invoke(
+                            json.optString("error", "Chat error"),
+                            json.optString("clientMessageId").ifEmpty { null }
+                        )
                         return
                     }
                     if (type == "AUTH_REQUIRED") {

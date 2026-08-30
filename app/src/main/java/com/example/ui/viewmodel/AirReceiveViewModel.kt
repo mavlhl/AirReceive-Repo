@@ -12,6 +12,8 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.AppDatabase
+import com.example.data.ChatMessage
+import com.example.data.ChatRepository
 import com.example.data.PhotoRepository
 import com.example.data.ReceivedPhoto
 import com.example.server.AirReceiveServer
@@ -112,7 +114,9 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     private val repository: PhotoRepository
+    private val chatRepository: ChatRepository
     val receivedPhotos: StateFlow<List<ReceivedPhoto>>
+    val chatUnreadCount: StateFlow<Int>
 
     private val _serverState = MutableStateFlow(ServerState())
     val serverState: StateFlow<ServerState> = _serverState.asStateFlow()
@@ -162,12 +166,20 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
     init {
         val database = AppDatabase.getDatabase(application)
         repository = PhotoRepository(database.photoDao())
+        chatRepository = ChatRepository(database.chatDao())
         
         receivedPhotos = repository.allPhotos
             .stateIn(
                 scope = viewModelScope,
                 started = SharingStarted.WhileSubscribed(5000),
                 initialValue = emptyList()
+            )
+
+        chatUnreadCount = chatRepository.observeUnreadCount()
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5000),
+                initialValue = 0
             )
 
         // Clear the non-functional preset cloud URL if it exists in SharedPreferences
@@ -533,6 +545,105 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    /** Ensures the free hosted gateway is active when Chat is used (default mode). */
+    fun ensureHostedGatewayForChat() = ensureHostedGatewayForSend()
+
+    fun observeChatMessages(peerDeviceId: String): Flow<List<ChatMessage>> =
+        chatRepository.observeMessagesForPeer(peerDeviceId)
+
+    fun markChatPeerRead(peerDeviceId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            chatRepository.markPeerRead(peerDeviceId)
+        }
+    }
+
+    fun refreshChatPeers(onResult: (List<GatewayReceiverDevice>) -> Unit = {}) {
+        val customUrl = _serverState.value.customUrl
+        if (customUrl.isEmpty()) {
+            onResult(emptyList())
+            return
+        }
+        viewModelScope.launch {
+            val peers = withContext(Dispatchers.IO) {
+                AirReceiveGatewaySender(getApplication(), customUrl)
+                    .fetchChatPeers(gatewayDeviceId())
+                    .filter { !isOwnGatewayDevice(it.id) }
+            }
+            onResult(peers)
+        }
+    }
+
+    fun sendChatMessage(toDeviceId: String, peerDisplayName: String, text: String) {
+        if (isOwnGatewayDevice(toDeviceId)) return
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        val clientMessageId = "a-${System.currentTimeMillis()}-${UUID.randomUUID()}"
+        viewModelScope.launch {
+            chatRepository.insert(
+                ChatMessage(
+                    peerDeviceId = toDeviceId,
+                    peerDisplayName = peerDisplayName,
+                    direction = ChatMessage.DIRECTION_OUT,
+                    text = trimmed,
+                    sentAt = System.currentTimeMillis(),
+                    messageId = clientMessageId,
+                    clientMessageId = clientMessageId,
+                    status = ChatMessage.STATUS_SENDING,
+                    isRead = true
+                )
+            )
+            val client = airReceiveGatewayClient
+            if (client == null) {
+                _eventFlow.emit(ViewModelEvent.Error("Gateway not connected. Enable gateway in Settings."))
+                return@launch
+            }
+            client.sendChatMessage(toDeviceId, trimmed, clientMessageId)
+        }
+    }
+
+    private suspend fun persistIncomingChat(
+        messageId: String,
+        fromDeviceId: String,
+        fromDisplayName: String,
+        text: String,
+        sentAt: Long
+    ) {
+        if (chatRepository.findByMessageId(messageId) != null) return
+        chatRepository.insert(
+            ChatMessage(
+                peerDeviceId = fromDeviceId,
+                peerDisplayName = fromDisplayName,
+                direction = ChatMessage.DIRECTION_IN,
+                text = text,
+                sentAt = sentAt,
+                messageId = messageId,
+                status = ChatMessage.STATUS_DELIVERED,
+                isRead = false
+            )
+        )
+    }
+
+    private suspend fun updateOutgoingChatStatus(
+        clientMessageId: String?,
+        messageId: String,
+        status: String
+    ) {
+        if (clientMessageId.isNullOrBlank()) return
+        val existing = chatRepository.findByClientMessageId(clientMessageId) ?: return
+        chatRepository.update(
+            existing.copy(
+                messageId = messageId.ifBlank { existing.messageId },
+                status = status
+            )
+        )
+    }
+
+    private suspend fun markOutgoingChatFailed(clientMessageId: String?) {
+        if (clientMessageId.isNullOrBlank()) return
+        val existing = chatRepository.findByClientMessageId(clientMessageId) ?: return
+        chatRepository.update(existing.copy(status = ChatMessage.STATUS_FAILED))
+    }
+
     /** Ensures the free hosted gateway is active when Send is used (default mode). */
     fun ensureHostedGatewayForSend() {
         if (prefs.getString(PREF_GATEWAY_MODE, GATEWAY_MODE_HOSTED) != GATEWAY_MODE_HOSTED) return
@@ -778,6 +889,22 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
                                     )
                                 )
                             }
+                        }
+                    },
+                    onChatMessage = { messageId, fromDeviceId, fromDisplayName, text, sentAt ->
+                        viewModelScope.launch(Dispatchers.IO) {
+                            persistIncomingChat(messageId, fromDeviceId, fromDisplayName, text, sentAt)
+                        }
+                    },
+                    onChatSent = { clientMessageId, messageId, status ->
+                        viewModelScope.launch(Dispatchers.IO) {
+                            updateOutgoingChatStatus(clientMessageId, messageId, status)
+                        }
+                    },
+                    onChatError = { error, clientMessageId ->
+                        viewModelScope.launch {
+                            markOutgoingChatFailed(clientMessageId)
+                            _eventFlow.emit(ViewModelEvent.Error(error))
                         }
                     },
                     onTransferStarted = onStart,

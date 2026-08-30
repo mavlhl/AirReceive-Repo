@@ -8,11 +8,13 @@ import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import com.example.data.ReceivedPhoto
+import com.example.ui.screens.ChatScreen
 import com.example.ui.screens.GalleryScreen
 import com.example.ui.screens.SendScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.screens.SupportScreen
 import com.example.ui.viewmodel.AirReceiveViewModel
+import com.example.ui.viewmodel.ChatViewModel
 import com.example.ui.viewmodel.ServerState
 
 @Composable
@@ -20,6 +22,7 @@ fun AirReceiveNavHost(
     navController: NavHostController,
     modifier: Modifier = Modifier,
     viewModel: AirReceiveViewModel,
+    chatViewModel: ChatViewModel,
     serverState: ServerState,
     photoList: List<ReceivedPhoto>,
     selectedPhotoForView: ReceivedPhoto?,
@@ -47,6 +50,13 @@ fun AirReceiveNavHost(
                 onOpenSettings = { navController.navigate(AppRoute.Settings) },
                 onSendPhotosGateway = { viewModel.sendPhotosToGateway(it) },
                 onSendPhotosLocal = { viewModel.sendPhotosToLocal(it) }
+            )
+        }
+        composable(AppRoute.Chat) {
+            ChatScreen(
+                serverState = serverState,
+                chatViewModel = chatViewModel,
+                onOpenSettings = { navController.navigate(AppRoute.Settings) }
             )
         }
         composable(AppRoute.Settings) {
