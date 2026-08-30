@@ -89,9 +89,9 @@ import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.*
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ProcessLifecycleOwner
 import com.example.util.ChatNotificationHelper
+import com.example.util.DonateLinks
 import com.example.util.rememberDarkThemePreference
 import com.example.util.GallerySaver
 import com.example.util.QrCodeGenerator

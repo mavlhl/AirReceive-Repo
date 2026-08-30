@@ -2313,13 +2313,11 @@ function gatewayNavHtml(activeNav) {
     { key: 'android', href: '/to-android', label: 'Send to Android' },
     { key: 'send', href: '/send', label: 'Send to device' },
     { key: 'receive', href: '/receive', label: 'Receive' },
-    { key: 'chat', href: '#', label: 'Chat', openChat: true },
     { key: 'support', href: '/support', label: 'Support' }
   ];
   return '<nav class="gateway-nav">' + items.map((item) => {
     const cls = item.key === activeNav ? 'gateway-nav-link active' : 'gateway-nav-link';
-    const chatCls = item.openChat ? ' ar-chat-nav-open' : '';
-    return '<a class="' + cls + chatCls + '" href="' + item.href + '">' + item.label + '</a>';
+    return '<a class="' + cls + '" href="' + item.href + '">' + item.label + '</a>';
   }).join('') + '</nav>';
 }
 
