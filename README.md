@@ -91,7 +91,7 @@ Uploads use `POST /upload` or `POST /upload/batch` with form field `target`: `ph
 
 Android uploads via `POST /upload/batch` with `target=receiver` and `targetDeviceId`. The web `/send` page uses the same API. Cleanup: `DELETE /batch/:batchId` after save.
 
-**Limits:** 20 files per batch, 100 MB total per batch. Images preview on `/receive`; PDF, ZIP, and other types download without a thumbnail. Use **Safari** on iPhone for Share-to-Photos when the batch is images only.
+**Limits:** Gateway sends from Android (or the web `/send` page) accept any number of files; large selections are auto-split into upload batches of up to 50 files or 100 MB each. The receiver page accumulates all chunks into one combined batch. Local Wi‑Fi send still uses a 20-file cap per batch. Images preview on `/receive`; PDF, ZIP, and other types download without a thumbnail. Use **Safari** on iPhone for Share-to-Photos when the batch is images only.
 
 ### Deploy / update on Render
 

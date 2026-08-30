@@ -24,7 +24,8 @@ class AirReceiveGatewaySender(
     private val serverUrl: String
 ) {
     companion object {
-        const val MAX_BATCH_FILES = 20
+        const val CHUNK_MAX_FILES = 50
+        const val MAX_BATCH_BYTES = 100L * 1024 * 1024
     }
 
     private val client = OkHttpClient.Builder()
@@ -142,6 +143,105 @@ class AirReceiveGatewaySender(
         }
     }
 
+    fun chunkUris(uris: List<Uri>): List<List<Uri>> {
+        if (uris.isEmpty()) return emptyList()
+        val chunks = mutableListOf<MutableList<Uri>>()
+        var current = mutableListOf<Uri>()
+        var currentBytes = 0L
+
+        fun flush() {
+            if (current.isNotEmpty()) {
+                chunks.add(current)
+                current = mutableListOf()
+                currentBytes = 0L
+            }
+        }
+
+        for (uri in uris) {
+            val size = queryFileSize(uri)
+            val wouldExceedBytes = current.isNotEmpty() &&
+                size > 0 &&
+                currentBytes + size > MAX_BATCH_BYTES
+            val wouldExceedCount = current.size >= CHUNK_MAX_FILES
+            if (wouldExceedBytes || wouldExceedCount) {
+                flush()
+            }
+            current.add(uri)
+            if (size > 0) currentBytes += size
+        }
+        flush()
+        return chunks
+    }
+
+    fun uploadBatches(
+        uris: List<Uri>,
+        targetDeviceId: String? = null,
+        onTransferStarted: (label: String, totalSize: Long) -> Unit,
+        onTransferProgress: (bytesRead: Long, totalBytes: Long) -> Unit,
+        onTransferCompleted: (photoCount: Int) -> Unit,
+        onTransferFailed: (error: String) -> Unit
+    ) {
+        if (uris.isEmpty()) return
+        val chunks = chunkUris(uris)
+        val totalFiles = uris.size
+        val knownTotal = uris.sumOf { queryFileSize(it).coerceAtLeast(0L) }
+        val overallTotal = if (knownTotal > 0) knownTotal else -1L
+        var bytesCompleted = 0L
+        var filesCompleted = 0
+
+        val startLabel = if (chunks.size > 1) {
+            "Sending $totalFiles files (${chunks.size} batches)"
+        } else {
+            "Sending $totalFiles files"
+        }
+        onTransferStarted(startLabel, if (overallTotal > 0) overallTotal else totalFiles.toLong())
+
+        for ((index, chunk) in chunks.withIndex()) {
+            var failed = false
+            var failureMessage = ""
+            val chunkKnownTotal = chunk.sumOf { queryFileSize(it).coerceAtLeast(0L) }
+            val chunkTotal = if (chunkKnownTotal > 0) chunkKnownTotal else -1L
+            val chunkBaseBytes = bytesCompleted
+
+            if (chunks.size > 1) {
+                onTransferStarted(
+                    "Sending $totalFiles files (batch ${index + 1}/${chunks.size})",
+                    if (overallTotal > 0) overallTotal else totalFiles.toLong()
+                )
+            }
+
+            uploadBatch(
+                uris = chunk,
+                targetDeviceId = targetDeviceId,
+                onTransferStarted = { _, _ -> },
+                onTransferProgress = { read, total ->
+                    val overallRead = chunkBaseBytes + read
+                    val overallTotalProgress = when {
+                        overallTotal > 0 -> overallTotal
+                        chunkTotal > 0 -> chunkBaseBytes + chunkTotal
+                        else -> overallRead
+                    }
+                    onTransferProgress(overallRead, overallTotalProgress)
+                },
+                onTransferCompleted = { count ->
+                    filesCompleted += count
+                    bytesCompleted += if (chunkTotal > 0) chunkTotal else 0L
+                },
+                onTransferFailed = { error ->
+                    failed = true
+                    failureMessage = error
+                }
+            )
+
+            if (failed) {
+                onTransferFailed(failureMessage)
+                return
+            }
+        }
+
+        onTransferCompleted(filesCompleted)
+    }
+
     fun uploadBatch(
         uris: List<Uri>,
         targetDeviceId: String? = null,
@@ -151,8 +251,8 @@ class AirReceiveGatewaySender(
         onTransferFailed: (error: String) -> Unit
     ) {
         if (uris.isEmpty()) return
-        if (uris.size > MAX_BATCH_FILES) {
-            onTransferFailed("Maximum $MAX_BATCH_FILES photos per batch.")
+        if (uris.size > CHUNK_MAX_FILES) {
+            onTransferFailed("Internal error: chunk exceeds $CHUNK_MAX_FILES files.")
             return
         }
 

@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.os.VibratorManager
+import android.provider.MediaStore
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -943,17 +944,23 @@ fun SendToIphonePanel(
     onSendPhotos: (List<Uri>) -> Unit
 ) {
     val context = LocalContext.current
-    val maxBatch = com.example.server.AirReceiveGatewaySender.MAX_BATCH_FILES
+    val pickerMaxItems = remember {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            minOf(MediaStore.getPickImagesMaxLimit(), 500)
+        } else {
+            500
+        }
+    }
     val canSend = selectedReceiverId != null
     val pickFilesLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
         if (uris.isNotEmpty()) {
-            onSendPhotos(uris.take(maxBatch))
+            onSendPhotos(uris)
         }
     }
     val pickImagesLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = maxBatch)
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = pickerMaxItems)
     ) { uris ->
         if (uris.isNotEmpty()) {
             onSendPhotos(uris)
@@ -984,7 +991,7 @@ fun SendToIphonePanel(
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "1. On the target PC or phone, open the receive page and keep it in the foreground.\n2. Pick the device below, then send up to 20 photos or files.",
+                text = "1. On the target PC or phone, open the receive page and keep it in the foreground.\n2. Pick the device below, then send any number of photos or files (large selections upload in batches).",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.fillMaxWidth()

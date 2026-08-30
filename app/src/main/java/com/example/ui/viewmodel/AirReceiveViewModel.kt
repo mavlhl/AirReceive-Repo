@@ -688,42 +688,43 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         }
         if (uris.isEmpty()) return
 
-        if (uris.size > AirReceiveGatewaySender.MAX_BATCH_FILES) {
-            viewModelScope.launch {
-                _eventFlow.emit(
-                    ViewModelEvent.Error("Maximum ${AirReceiveGatewaySender.MAX_BATCH_FILES} photos per batch.")
-                )
-            }
-            return
-        }
-
         viewModelScope.launch {
             acquireLocks()
             try {
                 val sender = AirReceiveGatewaySender(getApplication(), customUrl)
                 withContext(Dispatchers.IO) {
-                    sender.uploadBatch(
+                    sender.uploadBatches(
                         uris = uris,
                         targetDeviceId = targetDeviceId,
                         onTransferStarted = { label, size ->
                             runOnMain {
                                 _serverState.update {
-                                    it.copy(
-                                        activeTransfer = ActiveTransfer(
-                                            fileName = label,
-                                            progress = 0f,
-                                            bytesRead = 0,
-                                            totalBytes = size,
-                                            status = TransferStatus.IN_PROGRESS,
-                                            direction = TransferDirection.OUTBOUND
+                                    val existing = it.activeTransfer
+                                    if (existing != null && existing.status == TransferStatus.IN_PROGRESS) {
+                                        it.copy(
+                                            activeTransfer = existing.copy(
+                                                fileName = label,
+                                                totalBytes = if (size > 0) size else existing.totalBytes
+                                            )
                                         )
-                                    )
+                                    } else {
+                                        it.copy(
+                                            activeTransfer = ActiveTransfer(
+                                                fileName = label,
+                                                progress = 0f,
+                                                bytesRead = 0,
+                                                totalBytes = size,
+                                                status = TransferStatus.IN_PROGRESS,
+                                                direction = TransferDirection.OUTBOUND
+                                            )
+                                        )
+                                    }
                                 }
                             }
                         },
                         onTransferProgress = { read, total ->
                             val now = SystemClock.elapsedRealtime()
-                            if (read < total && now - lastSendProgressMs < 80) return@uploadBatch
+                            if (read < total && now - lastSendProgressMs < 80) return@uploadBatches
                             lastSendProgressMs = now
                             runOnMain {
                                 _serverState.update {

@@ -6,7 +6,7 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
 
-const MAX_BATCH_FILES = 20;
+const MAX_BATCH_FILES = 50;
 const MAX_BATCH_BYTES = 100 * 1024 * 1024; // 100 MB
 const FILE_TTL_MS = 5 * 60 * 1000;
 
@@ -816,7 +816,7 @@ app.get('/', (req, res) => {
       </a>
       <a class="hub-card" href="/send">
         <strong>Send to PC or phone</strong>
-        <span>Pick an online receiver and send up to 20 files (images, PDF, etc.).</span>
+        <span>Pick an online receiver and send any number of files (large selections upload in batches).</span>
       </a>
       <a class="hub-card" href="/receive">
         <strong>Receive files</strong>
@@ -1474,7 +1474,7 @@ app.get('/send', (req, res) => {
 
       <div class="drop-zone disabled" id="dropZone">
         <strong>Select files to send</strong>
-        <span>Up to ${MAX_BATCH_FILES} files, 100 MB total — images, PDF, ZIP, etc.</span>
+        <span>Any number of files — uploaded in batches of up to ${MAX_BATCH_FILES} files or 100 MB each.</span>
         <input type="file" id="fileInput" class="file-input" multiple />
       </div>
 
@@ -1486,6 +1486,7 @@ app.get('/send', (req, res) => {
   </div>
   <script>
     const MAX_BATCH_FILES = ${MAX_BATCH_FILES};
+    const MAX_BATCH_BYTES = ${MAX_BATCH_BYTES};
     const SENDER_NAME_KEY = 'airreceive_sender_name';
     const deviceListEl = document.getElementById('deviceList');
     const dropZone = document.getElementById('dropZone');
@@ -1567,30 +1568,60 @@ app.get('/send', (req, res) => {
     });
     fileInput.addEventListener('change', () => {
       if (fileInput.files.length) {
-        pendingFiles = Array.from(fileInput.files).slice(0, MAX_BATCH_FILES);
+        pendingFiles = Array.from(fileInput.files);
         dropZone.querySelector('strong').textContent = pendingFiles.length + ' file(s) selected';
         updateSendEnabled();
       }
     });
 
+    function chunkFiles(files) {
+      const chunks = [];
+      let current = [];
+      let currentBytes = 0;
+      for (const file of files) {
+        const wouldExceed = current.length > 0 && (
+          current.length >= MAX_BATCH_FILES ||
+          (file.size > 0 && currentBytes + file.size > MAX_BATCH_BYTES)
+        );
+        if (wouldExceed) {
+          chunks.push(current);
+          current = [];
+          currentBytes = 0;
+        }
+        current.push(file);
+        if (file.size > 0) currentBytes += file.size;
+      }
+      if (current.length) chunks.push(current);
+      return chunks;
+    }
+
     sendBtn.addEventListener('click', async () => {
       if (!selectedDeviceId || pendingFiles.length === 0) return;
       sendBtn.disabled = true;
       progressText.style.display = 'block';
-      progressText.textContent = 'Uploading...';
-      const formData = new FormData();
-      formData.append('target', 'receiver');
-      formData.append('targetDeviceId', selectedDeviceId);
-      pendingFiles.forEach((f) => formData.append('files', f));
+      const chunks = chunkFiles(pendingFiles);
+      let sentTotal = 0;
       try {
-        const res = await fetch('/upload/batch', { method: 'POST', body: formData });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          showError(data.error || 'Upload failed. Is the receiver still online?');
-          sendBtn.disabled = false;
-          return;
+        for (let i = 0; i < chunks.length; i++) {
+          const chunk = chunks[i];
+          progressText.textContent = chunks.length > 1
+            ? 'Uploading batch ' + (i + 1) + ' of ' + chunks.length + '...'
+            : 'Uploading...';
+          const formData = new FormData();
+          formData.append('target', 'receiver');
+          formData.append('targetDeviceId', selectedDeviceId);
+          chunk.forEach((f) => formData.append('files', f));
+          const res = await fetch('/upload/batch', { method: 'POST', body: formData });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            showError(data.error || 'Upload failed. Is the receiver still online?');
+            sendBtn.disabled = false;
+            progressText.style.display = 'none';
+            return;
+          }
+          sentTotal += data.count || chunk.length;
         }
-        showSuccess('Sent ' + (data.count || pendingFiles.length) + ' file(s) successfully.');
+        showSuccess('Sent ' + sentTotal + ' file(s) successfully.');
         pendingFiles = [];
         fileInput.value = '';
         dropZone.querySelector('strong').textContent = 'Select files to send';
@@ -1929,7 +1960,7 @@ app.get('/receive', (req, res) => {
 
     let ws = null;
     let reconnectTimer = null;
-    let currentBatchId = null;
+    let pendingBatchIds = [];
     let cachedBatchFiles = [];
 
     function wsUrl() {
@@ -1998,15 +2029,24 @@ app.get('/receive', (req, res) => {
       return 'image/jpeg';
     }
 
+    function updateBatchTitle() {
+      const count = cachedBatchFiles.length;
+      batchTitle.textContent = count + ' file' + (count === 1 ? '' : 's') + ' ready';
+      saveAllBtn.textContent = 'Save all ' + count + ' photos to Photos';
+      downloadAllBtn.textContent = 'Download all ' + count + ' files';
+    }
+
     async function cleanupBatch() {
-      if (!currentBatchId) return;
-      try {
-        await fetch('/batch/' + currentBatchId, { method: 'DELETE' });
-      } catch (e) {
-        console.warn('Batch cleanup failed', e);
+      for (const batchId of pendingBatchIds) {
+        try {
+          await fetch('/batch/' + batchId, { method: 'DELETE' });
+        } catch (e) {
+          console.warn('Batch cleanup failed', batchId, e);
+        }
       }
-      currentBatchId = null;
+      pendingBatchIds = [];
       cachedBatchFiles = [];
+      thumbGrid.innerHTML = '';
     }
 
     async function shareOneFile(entry) {
@@ -2170,9 +2210,7 @@ app.get('/receive', (req, res) => {
 
       ws.onerror = () => setConnected(false);
 
-      async function loadBatchThumbnails(files) {
-        thumbGrid.innerHTML = '';
-        cachedBatchFiles = [];
+      async function appendBatchThumbnails(files) {
         for (const file of files) {
           try {
             const res = await fetch('/download/' + file.id + '?keep=1');
@@ -2249,17 +2287,18 @@ app.get('/receive', (req, res) => {
       async function handleBatch(msg) {
         waitingText.style.display = 'none';
         successToast.style.display = 'none';
-        currentBatchId = msg.batchId;
-        const count = msg.count || (msg.files && msg.files.length) || 0;
-        batchTitle.textContent = count + ' file' + (count === 1 ? '' : 's') + ' ready';
-        saveAllBtn.textContent = 'Save all ' + count + ' photos to Photos';
-        downloadAllBtn.textContent = 'Download all ' + count + ' files';
+        if (msg.batchId && !pendingBatchIds.includes(msg.batchId)) {
+          pendingBatchIds.push(msg.batchId);
+        }
+        const incoming = msg.count || (msg.files && msg.files.length) || 0;
+        batchWrap.classList.add('visible');
         saveAllBtn.disabled = true;
         downloadAllBtn.disabled = true;
-        batchWrap.classList.add('visible');
         if (msg.files && msg.files.length) {
-          await loadBatchThumbnails(msg.files);
+          batchTitle.textContent = 'Receiving ' + incoming + ' file(s)... (' + cachedBatchFiles.length + ' so far)';
+          await appendBatchThumbnails(msg.files);
         }
+        updateBatchTitle();
       }
 
       ws.onmessage = async (event) => {
