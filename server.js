@@ -49,9 +49,15 @@ function isPasswordProtectionRequired(targetDeviceId) {
   return entry ? !!entry.passwordProtection : false;
 }
 
-function createTransferRequest(targetDeviceId, senderLabel) {
-  const entry = targetDeviceId ? getDeviceEntry(targetDeviceId) : null;
-  if (targetDeviceId && !entry) {
+function createTransferRequest(targetDeviceId, senderLabel, senderDeviceId) {
+  const target = (targetDeviceId || '').trim() || null;
+  const sender = (senderDeviceId || '').trim() || null;
+  if (target && sender && target === sender) {
+    return { error: 'You cannot send files to your own device.', status: 400 };
+  }
+
+  const entry = target ? getDeviceEntry(target) : null;
+  if (target && !entry) {
     return { error: 'Target device is offline or not found.', status: 404 };
   }
 
@@ -84,7 +90,7 @@ function createTransferRequest(targetDeviceId, senderLabel) {
     senderLabel: senderLabel || null
   });
 
-  notifyDevice(targetDeviceId, JSON.stringify({
+  notifyDevice(target, JSON.stringify({
     type: 'AUTH_REQUIRED',
     sessionId,
     senderLabel: senderLabel || 'A sender'
@@ -125,6 +131,19 @@ function getTransferSessionStatus(sessionId) {
     return { status: 'approved', uploadToken: session.uploadToken };
   }
   return { status: 'pending' };
+}
+
+function getSenderDeviceId(req) {
+  return String(req.body?.senderDeviceId || req.headers['x-sender-device-id'] || '').trim();
+}
+
+function rejectSelfTransfer(targetDeviceId, senderDeviceId) {
+  const target = (targetDeviceId || '').trim();
+  const sender = (senderDeviceId || '').trim();
+  if (target && sender && target === sender) {
+    return 'You cannot send files to your own device.';
+  }
+  return null;
 }
 
 function getTransferAuthFromRequest(req) {
@@ -212,11 +231,13 @@ function relayToTargets(target, targetDeviceId, notification) {
   return true;
 }
 
-function listDevices(roleFilter) {
+function listDevices(roleFilter, excludeDeviceId) {
+  const exclude = (excludeDeviceId || '').trim();
   const receivers = [];
   const phones = [];
   for (const [id, entry] of deviceRegistry.entries()) {
     if (entry.ws.readyState !== WebSocket.OPEN) continue;
+    if (exclude && id === exclude) continue;
     const item = {
       id,
       displayName: entry.displayName,
@@ -393,7 +414,8 @@ app.use('/docs', express.static(path.join(__dirname, 'docs')));
 // List online registered devices
 app.get('/api/devices', (req, res) => {
   const role = req.query.role;
-  const lists = listDevices(role);
+  const exclude = (req.query.exclude || '').trim() || null;
+  const lists = listDevices(role, exclude);
   res.json(lists);
 });
 
@@ -414,7 +436,8 @@ app.get('/api/status', (req, res) => {
 app.post('/api/transfer/request', (req, res) => {
   const targetDeviceId = (req.body.targetDeviceId || '').trim() || null;
   const senderLabel = (req.body.senderLabel || '').trim() || null;
-  const result = createTransferRequest(targetDeviceId, senderLabel);
+  const senderDeviceId = (req.body.senderDeviceId || '').trim() || null;
+  const result = createTransferRequest(targetDeviceId, senderLabel, senderDeviceId);
   if (result.error) {
     return res.status(result.status || 400).json({ error: result.error });
   }
@@ -468,6 +491,11 @@ app.post('/upload', upload.single('file'), (req, res) => {
 
   const target = (req.body.target === 'receiver') ? 'receiver' : 'phone';
   const targetDeviceId = (req.body.targetDeviceId || '').trim() || null;
+  const selfError = rejectSelfTransfer(targetDeviceId, getSenderDeviceId(req));
+  if (selfError) {
+    try { if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
+    return res.status(400).json({ error: selfError });
+  }
   const transferAuth = getTransferAuthFromRequest(req);
   const authCheck = validateUploadToken(transferAuth.sessionId, transferAuth.uploadToken, targetDeviceId);
   if (!authCheck.ok) {
@@ -542,6 +570,13 @@ app.post('/upload/batch', upload.array('files', MAX_BATCH_FILES), (req, res) => 
 
   const target = (req.body.target === 'receiver') ? 'receiver' : 'phone';
   const targetDeviceId = (req.body.targetDeviceId || '').trim() || null;
+  const selfError = rejectSelfTransfer(targetDeviceId, getSenderDeviceId(req));
+  if (selfError) {
+    for (const f of files) {
+      try { if (fs.existsSync(f.path)) fs.unlinkSync(f.path); } catch (e) { /* ignore */ }
+    }
+    return res.status(400).json({ error: selfError });
+  }
   const transferAuth = getTransferAuthFromRequest(req);
   const authCheck = validateUploadToken(transferAuth.sessionId, transferAuth.uploadToken, targetDeviceId);
   if (!authCheck.ok) {
@@ -714,11 +749,16 @@ function gatewayBatchUtilsJs() {
 
 function transferAuthClientJs() {
   return `
+    const SENDER_DEVICE_ID_KEY = 'airreceive_device_id';
+    function getSenderDeviceId() {
+      try { return localStorage.getItem(SENDER_DEVICE_ID_KEY) || ''; } catch (e) { return ''; }
+    }
     async function requestTransferAuth(targetDeviceId, senderLabel) {
+      const senderDeviceId = getSenderDeviceId();
       const res = await fetch('/api/transfer/request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetDeviceId, senderLabel })
+        body: JSON.stringify({ targetDeviceId, senderLabel, senderDeviceId: senderDeviceId || undefined })
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Authorization request failed');
@@ -1518,11 +1558,13 @@ app.get('/to-android', (req, res) => {
 
     async function refreshPhones() {
       try {
-        const res = await fetch('/api/devices?role=phone');
+        const excludeId = new URLSearchParams(window.location.search).get('exclude') || getSenderDeviceId();
+        const query = '/api/devices?role=phone' + (excludeId ? '&exclude=' + encodeURIComponent(excludeId) : '');
+        const res = await fetch(query);
         const data = await res.json();
-        const phones = data.phones || [];
+        const phones = (data.phones || []).filter((dev) => dev.id !== excludeId);
         if (phones.length === 0) {
-          phoneListEl.innerHTML = '<div class="device-empty">No phones online. Open AirReceive on Android, enable gateway in <strong>Settings</strong>, and keep the app in the foreground.</div>';
+          phoneListEl.innerHTML = '<div class="device-empty">No other phones online. Open AirReceive on another Android device, enable gateway in <strong>Settings</strong>, and keep the app in the foreground. You cannot send to this device.</div>';
           selectedPhoneId = null;
           updateDropZoneEnabled();
           return;
@@ -1645,6 +1687,8 @@ app.get('/to-android', (req, res) => {
           formData.append('targetDeviceId', selectedPhoneId);
           formData.append('sessionId', auth.sessionId);
           formData.append('uploadToken', auth.uploadToken);
+          const senderDeviceId = getSenderDeviceId();
+          if (senderDeviceId) formData.append('senderDeviceId', senderDeviceId);
           chunk.forEach((f) => formData.append('files', f));
 
           const res = await fetch('/upload/batch', { method: 'POST', body: formData });
@@ -1805,6 +1849,7 @@ app.get('/send', (req, res) => {
     ${transferAuthClientJs()}
     ${gatewayBatchUtilsJs()}
     const SENDER_NAME_KEY = 'airreceive_sender_name';
+    const DEVICE_ID_KEY = 'airreceive_device_id';
     const deviceListEl = document.getElementById('deviceList');
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
@@ -1845,11 +1890,13 @@ app.get('/send', (req, res) => {
 
     async function refreshDevices() {
       try {
-        const res = await fetch('/api/devices?role=receiver');
+        const excludeId = getSenderDeviceId();
+        const query = '/api/devices?role=receiver' + (excludeId ? '&exclude=' + encodeURIComponent(excludeId) : '');
+        const res = await fetch(query);
         const data = await res.json();
-        const receivers = data.receivers || [];
+        const receivers = (data.receivers || []).filter((dev) => dev.id !== excludeId);
         if (receivers.length === 0) {
-          deviceListEl.innerHTML = '<div class="device-empty">No receivers online. Open <strong>/receive</strong> on the target laptop or phone first.</div>';
+          deviceListEl.innerHTML = '<div class="device-empty">No other receivers online. Open <strong>/receive</strong> on another laptop or phone first. You cannot send to this device.</div>';
           selectedDeviceId = null;
           updateSendEnabled();
           return;
@@ -1923,6 +1970,8 @@ app.get('/send', (req, res) => {
           formData.append('targetDeviceId', selectedDeviceId);
           formData.append('sessionId', auth.sessionId);
           formData.append('uploadToken', auth.uploadToken);
+          const senderDeviceId = getSenderDeviceId();
+          if (senderDeviceId) formData.append('senderDeviceId', senderDeviceId);
           chunk.forEach((f) => formData.append('files', f));
           const res = await fetch('/upload/batch', { method: 'POST', body: formData });
           const data = await res.json().catch(() => ({}));

@@ -75,6 +75,9 @@ fun SendScreen(
                 LocalWifiSendPanel(
                     targetUrl = serverState.localSendTargetUrl,
                     defaultPortalUrl = serverState.serverUrl.removeSuffix("/"),
+                    isOwnDeviceTarget = viewModel.isOwnLocalPortalUrl(
+                        serverState.localSendTargetUrl.ifEmpty { serverState.serverUrl.removeSuffix("/") }
+                    ),
                     onTargetUrlChange = { viewModel.updateLocalSendTarget(it) },
                     onSaveTargetUrl = { },
                     onSendPhotos = onSendPhotosLocal

@@ -1,6 +1,6 @@
 # AirReceive
 
-AirReceive is an Android app for cross-device photo transfer—similar to Apple’s AirDrop. It can **receive** photos on Android (from iPhone browsers or other devices) and **send** photos from Android to an iPhone via the public gateway. 
+AirReceive is an Android app for cross-device photo transfer—similar to Apple’s AirDrop. It can **receive** photos on Android (from iPhone browsers or other devices) and **send** photos from Android to an iPhone via the public gateway. Very useful!
 
 Distinctive to existing file sharing services (like Send Anywhere and LocalSend), you do not need to be on the same network between your files, even with people not in your district, the same country and even beyond the seas!
 

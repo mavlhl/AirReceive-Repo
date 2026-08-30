@@ -864,6 +864,7 @@ fun SendToIphoneSetupCard(onOpenSettings: () -> Unit = {}) {
 fun LocalWifiSendPanel(
     targetUrl: String,
     defaultPortalUrl: String,
+    isOwnDeviceTarget: Boolean,
     onTargetUrlChange: (String) -> Unit,
     onSaveTargetUrl: () -> Unit,
     onSendPhotos: (List<Uri>) -> Unit
@@ -887,7 +888,7 @@ fun LocalWifiSendPanel(
         onSendPhotos(uris)
     }
 
-    val canSend = effectiveTarget().isNotBlank()
+    val canSend = effectiveTarget().isNotBlank() && !isOwnDeviceTarget
 
     val pickFilesLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
@@ -967,6 +968,16 @@ fun LocalWifiSendPanel(
                     color = MacSystemGreen,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            if (isOwnDeviceTarget) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "This URL points to this device. Enter another device's portal URL from their Settings tab.",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.error,
+                    lineHeight = 18.sp
                 )
             }
 
@@ -1095,7 +1106,7 @@ fun SendToIphonePanel(
 
             if (onlineReceivers.isEmpty() && onlinePhones.isEmpty()) {
                 Text(
-                    text = "No devices online. Open /receive on a browser or enable gateway on another Android phone, then tap Refresh.",
+                    text = "No other devices online. Open /receive on another browser or enable gateway on another Android phone, then tap Refresh. You cannot send to this device.",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.fillMaxWidth()

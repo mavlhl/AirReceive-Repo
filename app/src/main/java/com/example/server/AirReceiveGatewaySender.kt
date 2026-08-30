@@ -118,14 +118,23 @@ class AirReceiveGatewaySender(
         }
     }
 
-    fun fetchOnlineReceivers(): List<GatewayReceiverDevice> =
-        fetchDevicesByRole("receiver", "receivers")
+    fun fetchOnlineReceivers(excludeDeviceId: String? = null): List<GatewayReceiverDevice> =
+        fetchDevicesByRole("receiver", "receivers", excludeDeviceId)
 
-    fun fetchOnlinePhones(): List<GatewayReceiverDevice> =
-        fetchDevicesByRole("phone", "phones")
+    fun fetchOnlinePhones(excludeDeviceId: String? = null): List<GatewayReceiverDevice> =
+        fetchDevicesByRole("phone", "phones", excludeDeviceId)
 
-    private fun fetchDevicesByRole(role: String, jsonKey: String): List<GatewayReceiverDevice> {
-        val url = "${gatewayBaseUrl()}/api/devices?role=$role"
+    private fun fetchDevicesByRole(
+        role: String,
+        jsonKey: String,
+        excludeDeviceId: String? = null
+    ): List<GatewayReceiverDevice> {
+        val excludeQuery = if (!excludeDeviceId.isNullOrBlank()) {
+            "&exclude=${java.net.URLEncoder.encode(excludeDeviceId, "UTF-8")}"
+        } else {
+            ""
+        }
+        val url = "${gatewayBaseUrl()}/api/devices?role=$role$excludeQuery"
         val request = Request.Builder().url(url).get().build()
         return try {
             client.newCall(request).execute().use { response ->
@@ -189,6 +198,7 @@ class AirReceiveGatewaySender(
         uploadTarget: String = "receiver",
         sessionId: String? = null,
         uploadToken: String? = null,
+        senderDeviceId: String? = null,
         onTransferStarted: (label: String, totalSize: Long) -> Unit,
         onTransferProgress: (bytesRead: Long, totalBytes: Long) -> Unit,
         onTransferCompleted: (photoCount: Int) -> Unit,
@@ -229,6 +239,7 @@ class AirReceiveGatewaySender(
                 uploadTarget = uploadTarget,
                 sessionId = sessionId,
                 uploadToken = uploadToken,
+                senderDeviceId = senderDeviceId,
                 onTransferStarted = { _, _ -> },
                 onTransferProgress = { read, total ->
                     val overallRead = chunkBaseBytes + read
@@ -258,8 +269,18 @@ class AirReceiveGatewaySender(
         onTransferCompleted(filesCompleted)
     }
 
-    fun requestTransferAuth(targetDeviceId: String?, senderLabel: String?): TransferAuthSession {
-        return TransferAuthClient.requestAuth(client, gatewayBaseUrl(), targetDeviceId, senderLabel)
+    fun requestTransferAuth(
+        targetDeviceId: String?,
+        senderLabel: String?,
+        senderDeviceId: String? = null
+    ): TransferAuthSession {
+        return TransferAuthClient.requestAuth(
+            client,
+            gatewayBaseUrl(),
+            targetDeviceId,
+            senderLabel,
+            senderDeviceId
+        )
     }
 
     fun pollTransferAuth(sessionId: String): TransferAuthSession? {
@@ -272,6 +293,7 @@ class AirReceiveGatewaySender(
         uploadTarget: String = "receiver",
         sessionId: String? = null,
         uploadToken: String? = null,
+        senderDeviceId: String? = null,
         onTransferStarted: (label: String, totalSize: Long) -> Unit,
         onTransferProgress: (bytesRead: Long, totalBytes: Long) -> Unit,
         onTransferCompleted: (photoCount: Int) -> Unit,
@@ -305,6 +327,9 @@ class AirReceiveGatewaySender(
         }
         if (!uploadToken.isNullOrBlank()) {
             multipart.addFormDataPart("uploadToken", uploadToken)
+        }
+        if (!senderDeviceId.isNullOrBlank()) {
+            multipart.addFormDataPart("senderDeviceId", senderDeviceId)
         }
 
         for ((uri, fileName, fileSize) in items) {
@@ -342,6 +367,9 @@ class AirReceiveGatewaySender(
         }
         if (!uploadToken.isNullOrBlank()) {
             requestBuilder.header("X-Upload-Token", uploadToken)
+        }
+        if (!senderDeviceId.isNullOrBlank()) {
+            requestBuilder.header("X-Sender-Device-Id", senderDeviceId)
         }
         val request = requestBuilder.build()
 

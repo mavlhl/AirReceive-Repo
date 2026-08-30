@@ -64,11 +64,13 @@ object TransferAuthClient {
         client: OkHttpClient,
         baseUrl: String,
         targetDeviceId: String?,
-        senderLabel: String?
+        senderLabel: String?,
+        senderDeviceId: String? = null
     ): TransferAuthSession {
         val body = JSONObject().apply {
             if (!targetDeviceId.isNullOrBlank()) put("targetDeviceId", targetDeviceId)
             if (!senderLabel.isNullOrBlank()) put("senderLabel", senderLabel)
+            if (!senderDeviceId.isNullOrBlank()) put("senderDeviceId", senderDeviceId)
         }
         val request = Request.Builder()
             .url("${baseUrl.removeSuffix("/")}/api/transfer/request")

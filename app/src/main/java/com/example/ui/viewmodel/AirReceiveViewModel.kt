@@ -134,6 +134,24 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         prefs.getString("device_display_name", null)?.trim().orEmpty()
             .ifEmpty { android.os.Build.MODEL }
 
+    private fun gatewayDeviceId(): String? =
+        prefs.getString("gateway_device_id", null)?.trim()?.ifEmpty { null }
+
+    fun isOwnGatewayDevice(deviceId: String?): Boolean =
+        !deviceId.isNullOrBlank() && deviceId == gatewayDeviceId()
+
+    fun isOwnLocalPortalUrl(targetUrl: String): Boolean {
+        val ip = _serverState.value.ipAddress.trim()
+        if (ip.isEmpty()) return false
+        val normalized = targetUrl.trim().removeSuffix("/").lowercase()
+        val ownPortal = "http://$ip:8080"
+        val ownServer = _serverState.value.serverUrl.trim().removeSuffix("/").lowercase()
+        return normalized == ownPortal ||
+            normalized == "$ownPortal/upload" ||
+            normalized.startsWith("$ownPortal/") ||
+            (ownServer.isNotEmpty() && (normalized == ownServer || normalized.startsWith("$ownServer/")))
+    }
+
     /** Compose state must be updated on the main thread. */
     private fun runOnMain(block: () -> Unit) {
         viewModelScope.launch(Dispatchers.Main.immediate) {
@@ -313,6 +331,12 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
                 _eventFlow.emit(
                     ViewModelEvent.Error("Enter the receiver's portal URL (from their Settings tab).")
                 )
+            }
+            return
+        }
+        if (isOwnLocalPortalUrl(targetUrl)) {
+            viewModelScope.launch {
+                _eventFlow.emit(ViewModelEvent.Error("You cannot send files to this device."))
             }
             return
         }
@@ -797,8 +821,9 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         if (customUrl.isEmpty()) return
         viewModelScope.launch {
             val sender = AirReceiveGatewaySender(getApplication(), customUrl)
-            val receivers = withContext(Dispatchers.IO) { sender.fetchOnlineReceivers() }
-            val phones = withContext(Dispatchers.IO) { sender.fetchOnlinePhones() }
+            val excludeId = gatewayDeviceId()
+            val receivers = withContext(Dispatchers.IO) { sender.fetchOnlineReceivers(excludeId) }
+            val phones = withContext(Dispatchers.IO) { sender.fetchOnlinePhones(excludeId) }
             _serverState.update { state ->
                 val selectedReceiver = state.selectedReceiverId
                 val selectedPhone = state.selectedPhoneId
@@ -823,6 +848,7 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun selectReceiver(deviceId: String?) {
+        if (deviceId != null && isOwnGatewayDevice(deviceId)) return
         _serverState.update {
             it.copy(
                 selectedReceiverId = deviceId,
@@ -832,6 +858,7 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun selectPhone(deviceId: String?) {
+        if (deviceId != null && isOwnGatewayDevice(deviceId)) return
         _serverState.update {
             it.copy(
                 selectedPhoneId = deviceId,
@@ -938,14 +965,27 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
             return
         }
         if (uris.isEmpty()) return
+        if (isOwnGatewayDevice(targetDeviceId)) {
+            viewModelScope.launch {
+                _eventFlow.emit(ViewModelEvent.Error("You cannot send files to this device."))
+            }
+            return
+        }
 
         viewModelScope.launch {
             acquireLocks()
             try {
                 val sender = AirReceiveGatewaySender(getApplication(), customUrl)
+                val senderDeviceId = gatewayDeviceId()
                 val auth = try {
                     resolveTransferAuth(
-                        requestAuth = { sender.requestTransferAuth(targetDeviceId, gatewayDeviceDisplayName()) },
+                        requestAuth = {
+                            sender.requestTransferAuth(
+                                targetDeviceId,
+                                gatewayDeviceDisplayName(),
+                                senderDeviceId
+                            )
+                        },
                         pollAuth = { sender.pollTransferAuth(it) }
                     )
                 } catch (e: Exception) {
@@ -959,6 +999,7 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
                         uploadTarget = uploadTarget,
                         sessionId = auth.sessionId,
                         uploadToken = auth.uploadToken,
+                        senderDeviceId = senderDeviceId,
                         onTransferStarted = { label, size ->
                             runOnMain {
                                 _serverState.update {
