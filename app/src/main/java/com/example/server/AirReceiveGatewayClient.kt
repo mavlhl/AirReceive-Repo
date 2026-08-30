@@ -20,6 +20,9 @@ class AirReceiveGatewayClient(
     private val onChatMessage: ((messageId: String, fromDeviceId: String, fromDisplayName: String, text: String, sentAt: Long) -> Unit)? = null,
     private val onChatSent: ((clientMessageId: String?, messageId: String, status: String) -> Unit)? = null,
     private val onChatError: ((error: String, clientMessageId: String?) -> Unit)? = null,
+    private val onGlobalChatMessage: ((messageId: String, fromDeviceId: String, fromDisplayName: String, text: String, sentAt: Long) -> Unit)? = null,
+    private val onGlobalChatSent: ((clientMessageId: String?, messageId: String) -> Unit)? = null,
+    private val onGlobalChatError: ((error: String, clientMessageId: String?) -> Unit)? = null,
     private val onTransferStarted: (fileName: String, fileSize: Long) -> Unit,
     private val onTransferProgress: (bytesRead: Long, totalBytes: Long) -> Unit,
     private val onTransferCompleted: (
@@ -65,6 +68,14 @@ class AirReceiveGatewayClient(
         webSocket?.send(JSONObject().apply {
             put("type", "CHAT_SEND")
             put("toDeviceId", toDeviceId)
+            put("text", text)
+            put("clientMessageId", clientMessageId)
+        }.toString())
+    }
+
+    fun sendGlobalChatMessage(text: String, clientMessageId: String) {
+        webSocket?.send(JSONObject().apply {
+            put("type", "GLOBAL_CHAT_SEND")
             put("text", text)
             put("clientMessageId", clientMessageId)
         }.toString())
@@ -173,6 +184,30 @@ class AirReceiveGatewayClient(
                     if (type == "CHAT_ERROR") {
                         onChatError?.invoke(
                             json.optString("error", "Chat error"),
+                            json.optString("clientMessageId").ifEmpty { null }
+                        )
+                        return
+                    }
+                    if (type == "GLOBAL_CHAT_MESSAGE") {
+                        onGlobalChatMessage?.invoke(
+                            json.getString("messageId"),
+                            json.getString("fromDeviceId"),
+                            json.optString("fromDisplayName", "Device"),
+                            json.getString("text"),
+                            json.optLong("sentAt", System.currentTimeMillis())
+                        )
+                        return
+                    }
+                    if (type == "GLOBAL_CHAT_SENT") {
+                        onGlobalChatSent?.invoke(
+                            json.optString("clientMessageId").ifEmpty { null },
+                            json.optString("messageId")
+                        )
+                        return
+                    }
+                    if (type == "GLOBAL_CHAT_ERROR") {
+                        onGlobalChatError?.invoke(
+                            json.optString("error", "Global chat error"),
                             json.optString("clientMessageId").ifEmpty { null }
                         )
                         return

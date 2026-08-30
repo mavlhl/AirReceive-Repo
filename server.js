@@ -12,6 +12,8 @@ const FILE_TTL_MS = 5 * 60 * 1000;
 const TRANSFER_SESSION_TTL_MS = 5 * 60 * 1000;
 const CHAT_TTL_MS = 24 * 60 * 60 * 1000;
 const CHAT_MAX_TEXT_LEN = 2000;
+const GLOBAL_CHAT_PEER_ID = '__global__';
+const GLOBAL_CHAT_MAX_MESSAGES = 200;
 
 const app = express();
 app.use(express.json());
@@ -38,6 +40,8 @@ const transferSessions = new Map();
 const chatMessages = new Map();
 // deviceId -> messageId[]
 const pendingInbox = new Map();
+// ordered global room message ids (recent history for newcomers)
+const globalChatLog = [];
 
 function generatePin() {
   return String(Math.floor(100000 + Math.random() * 900000));
@@ -237,6 +241,94 @@ function relayToTargets(target, targetDeviceId, notification) {
   return true;
 }
 
+function formatGlobalChatMessagePayload(msg) {
+  return {
+    type: 'GLOBAL_CHAT_MESSAGE',
+    messageId: msg.messageId,
+    fromDeviceId: msg.fromDeviceId,
+    fromDisplayName: msg.fromDisplayName,
+    text: msg.text,
+    sentAt: msg.sentAt
+  };
+}
+
+function listGlobalChatMessages() {
+  const messages = [];
+  for (const messageId of globalChatLog) {
+    const msg = chatMessages.get(messageId);
+    if (!msg) continue;
+    messages.push({
+      messageId: msg.messageId,
+      fromDeviceId: msg.fromDeviceId,
+      fromDisplayName: msg.fromDisplayName,
+      text: msg.text,
+      sentAt: msg.sentAt
+    });
+  }
+  return messages;
+}
+
+function broadcastGlobalChat(chatMsg) {
+  const payload = JSON.stringify(formatGlobalChatMessagePayload(chatMsg));
+  for (const entry of deviceRegistry.values()) {
+    if (entry.ws.readyState === WebSocket.OPEN) {
+      entry.ws.send(payload);
+    }
+  }
+}
+
+function storeGlobalChatMessage(fromDeviceId, fromDisplayName, text) {
+  const messageId = uuidv4();
+  const sentAt = Date.now();
+  const chatMsg = {
+    messageId,
+    fromDeviceId,
+    toDeviceId: GLOBAL_CHAT_PEER_ID,
+    fromDisplayName,
+    text,
+    sentAt,
+    isGlobal: true
+  };
+  chatMessages.set(messageId, chatMsg);
+  globalChatLog.push(messageId);
+  while (globalChatLog.length > GLOBAL_CHAT_MAX_MESSAGES) {
+    const oldId = globalChatLog.shift();
+    if (oldId) chatMessages.delete(oldId);
+  }
+  return chatMsg;
+}
+
+function handleGlobalChatSend(ws, msg) {
+  if (!ws.isRegistered || !ws.deviceId) {
+    ws.send(JSON.stringify({ type: 'GLOBAL_CHAT_ERROR', error: 'Not registered.' }));
+    return;
+  }
+  const text = String(msg.text || '').trim();
+  const clientMessageId = msg.clientMessageId || null;
+  if (!text) {
+    ws.send(JSON.stringify({ type: 'GLOBAL_CHAT_ERROR', error: 'Message text cannot be empty.', clientMessageId }));
+    return;
+  }
+  if (text.length > CHAT_MAX_TEXT_LEN) {
+    ws.send(JSON.stringify({
+      type: 'GLOBAL_CHAT_ERROR',
+      error: `Message is too long (max ${CHAT_MAX_TEXT_LEN} characters).`,
+      clientMessageId
+    }));
+    return;
+  }
+  const senderEntry = deviceRegistry.get(ws.deviceId);
+  const fromDisplayName = senderEntry?.displayName || 'Unknown';
+  const chatMsg = storeGlobalChatMessage(ws.deviceId, fromDisplayName, text);
+  broadcastGlobalChat(chatMsg);
+  ws.send(JSON.stringify({
+    type: 'GLOBAL_CHAT_SENT',
+    clientMessageId,
+    messageId: chatMsg.messageId,
+    status: 'delivered'
+  }));
+}
+
 function formatChatMessagePayload(msg) {
   return {
     type: 'CHAT_MESSAGE',
@@ -253,6 +345,12 @@ function purgeExpiredChatMessages() {
   for (const [messageId, msg] of chatMessages.entries()) {
     if (now - msg.sentAt > CHAT_TTL_MS) {
       chatMessages.delete(messageId);
+    }
+  }
+  for (let i = globalChatLog.length - 1; i >= 0; i--) {
+    const messageId = globalChatLog[i];
+    if (!chatMessages.has(messageId)) {
+      globalChatLog.splice(i, 1);
     }
   }
   for (const [deviceId, inbox] of pendingInbox.entries()) {
@@ -454,6 +552,8 @@ function setupDeviceSocket(ws, role, label) {
         }
       } else if (msg.type === 'CHAT_SEND' && ws.isRegistered) {
         handleChatSend(ws, msg);
+      } else if (msg.type === 'GLOBAL_CHAT_SEND' && ws.isRegistered) {
+        handleGlobalChatSend(ws, msg);
       }
     } catch (e) {
       console.warn(`[WebSocket] Invalid message from ${label}:`, e.message);
@@ -561,6 +661,10 @@ app.get('/api/devices', (req, res) => {
 app.get('/api/chat/peers', (req, res) => {
   const exclude = (req.query.exclude || '').trim() || null;
   res.json({ peers: listChatPeers(exclude) });
+});
+
+app.get('/api/chat/global', (req, res) => {
+  res.json({ messages: listGlobalChatMessages() });
 });
 
 app.get('/api/chat/pending/:deviceId', (req, res) => {
@@ -1438,6 +1542,33 @@ function floatingChatWidgetCss() {
       color: var(--toast-error-text);
     }
     .ar-chat-inline-error.visible { display: block; }
+    .ar-chat-mode-tabs {
+      display: flex;
+      gap: 6px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .ar-chat-mode-tab {
+      flex: 1;
+      border: none;
+      background: transparent;
+      padding: 8px;
+      border-radius: 8px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      color: var(--text-muted);
+    }
+    .ar-chat-mode-tab.active {
+      background: var(--mac-elevated);
+      color: var(--text-main);
+    }
+    .ar-chat-sender-name {
+      font-size: 11px;
+      font-weight: 700;
+      margin-bottom: 4px;
+      color: var(--text-muted);
+    }
   `;
 }
 
@@ -1447,9 +1578,9 @@ function floatingChatWidgetHtml() {
     Chat
     <span class="ar-chat-fab-badge" id="arChatFabBadge"></span>
   </button>
-  <div class="ar-chat-panel" id="arChatPanel" aria-label="Direct messages">
+  <div class="ar-chat-panel" id="arChatPanel" aria-label="Chat">
     <div class="ar-chat-header">
-      <span class="ar-chat-header-title">Direct messages</span>
+      <span class="ar-chat-header-title">Chat</span>
       <div class="ar-chat-header-actions">
         <button type="button" class="ar-chat-header-btn" id="arChatMinimizeBtn">−</button>
       </div>
@@ -1462,8 +1593,22 @@ function floatingChatWidgetHtml() {
       <span id="arChatWsStatus">Connecting...</span>
     </div>
     <div class="ar-chat-inline-error" id="arChatError"></div>
+    <div class="ar-chat-mode-tabs">
+      <button type="button" class="ar-chat-mode-tab active" id="arChatModeGlobalBtn">Global</button>
+      <button type="button" class="ar-chat-mode-tab" id="arChatModeDirectBtn">Direct</button>
+    </div>
     <div class="ar-chat-body">
-      <div class="ar-chat-view active" id="arChatPeersView">
+      <div class="ar-chat-view active" id="arChatGlobalView">
+        <div class="ar-chat-view-header">
+          <span>Everyone on this gateway</span>
+        </div>
+        <div class="ar-chat-messages" id="arChatGlobalMessageList"></div>
+        <div class="ar-chat-compose">
+          <input type="text" id="arChatGlobalMessageInput" placeholder="Message everyone..." maxlength="2000" />
+          <button type="button" id="arChatGlobalSendBtn">Send</button>
+        </div>
+      </div>
+      <div class="ar-chat-view" id="arChatPeersView">
         <div class="ar-chat-view-header">
           <span>Online</span>
           <button type="button" class="ar-chat-header-btn" id="arChatRefreshPeersBtn">Refresh</button>
@@ -1494,6 +1639,8 @@ function floatingChatWidgetScript() {
   const DEVICE_ID_KEY = 'airreceive_device_id';
   const DEVICE_NAME_KEY = 'airreceive_chat_device_name';
   const HISTORY_KEY = 'airreceive_chat_history';
+  const GLOBAL_HISTORY_KEY = 'airreceive_global_chat_history';
+  const GLOBAL_PEER_ID = '__global__';
 
   let opts = {};
   let ws = null;
@@ -1503,6 +1650,9 @@ function floatingChatWidgetScript() {
   let reconnectTimer = null;
   let unreadWhileClosed = 0;
   let panelOpen = false;
+  let chatMode = 'global';
+  let baseDocumentTitle = document.title;
+  let notificationPermissionRequested = false;
 
   const fab = document.getElementById('arChatFab');
   const fabBadge = document.getElementById('arChatFabBadge');
@@ -1511,6 +1661,12 @@ function floatingChatWidgetScript() {
   const wsDot = document.getElementById('arChatWsDot');
   const wsStatus = document.getElementById('arChatWsStatus');
   const errorEl = document.getElementById('arChatError');
+  const modeGlobalBtn = document.getElementById('arChatModeGlobalBtn');
+  const modeDirectBtn = document.getElementById('arChatModeDirectBtn');
+  const globalView = document.getElementById('arChatGlobalView');
+  const globalMessageList = document.getElementById('arChatGlobalMessageList');
+  const globalMessageInput = document.getElementById('arChatGlobalMessageInput');
+  const globalSendBtn = document.getElementById('arChatGlobalSendBtn');
   const peerList = document.getElementById('arChatPeerList');
   const refreshPeersBtn = document.getElementById('arChatRefreshPeersBtn');
   const peersView = document.getElementById('arChatPeersView');
@@ -1568,16 +1724,85 @@ function floatingChatWidgetScript() {
     } else {
       fabBadge.classList.remove('visible');
     }
+    updateDocumentTitle();
+  }
+
+  function updateDocumentTitle() {
+    if (unreadWhileClosed > 0 && !panelOpen) {
+      document.title = '(' + Math.min(unreadWhileClosed, 99) + ') ' + baseDocumentTitle;
+    } else {
+      document.title = baseDocumentTitle;
+    }
+  }
+
+  function requestNotificationPermission() {
+    if (notificationPermissionRequested) return;
+    notificationPermissionRequested = true;
+    if (typeof Notification === 'undefined') return;
+    if (Notification.permission === 'default') {
+      Notification.requestPermission().catch(function() { /* non-blocking */ });
+    }
+  }
+
+  function playChatBeep() {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = 880;
+      gain.gain.value = 0.08;
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start();
+      osc.stop(ctx.currentTime + 0.12);
+      osc.onended = function() { ctx.close(); };
+    } catch (e) { /* ignore */ }
+  }
+
+  function showBrowserNotification(sender, body) {
+    if (typeof Notification === 'undefined') return;
+    if (Notification.permission !== 'granted') return;
+    const chatMinimized = !panelOpen;
+    if (!document.hidden && !chatMinimized) return;
+    try {
+      new Notification(sender, { body: body, tag: 'airreceive-chat' });
+    } catch (e) { /* ignore */ }
+  }
+
+  function shouldAlertForGlobalMessage() {
+    return !panelOpen || chatMode !== 'global';
+  }
+
+  function shouldAlertForDirectMessage(peerId) {
+    if (!panelOpen) return true;
+    if (chatMode !== 'direct') return true;
+    if (!selectedPeer || selectedPeer.id !== peerId) return true;
+    return false;
+  }
+
+  function bumpUnread(sender, preview, isGlobal) {
+    unreadWhileClosed += 1;
+    updateFabBadge();
+    if (!panelOpen) playChatBeep();
+    showBrowserNotification(
+      isGlobal ? sender + ' (global)' : sender,
+      preview
+    );
   }
 
   function openPanel() {
     panelOpen = true;
     unreadWhileClosed = 0;
     updateFabBadge();
+    requestNotificationPermission();
     if (panel) panel.classList.add('open');
     if (fab) fab.classList.add('hidden');
-    showPeersView();
+    showGlobalView();
     refreshPeers();
+    renderGlobalThread();
   }
 
   function closePanel() {
@@ -1586,7 +1811,24 @@ function floatingChatWidgetScript() {
     if (fab) fab.classList.remove('hidden');
   }
 
-  function showPeersView() {
+  function setModeTabActive(mode) {
+    chatMode = mode;
+    if (modeGlobalBtn) modeGlobalBtn.classList.toggle('active', mode === 'global');
+    if (modeDirectBtn) modeDirectBtn.classList.toggle('active', mode === 'direct');
+  }
+
+  function showGlobalView() {
+    setModeTabActive('global');
+    if (globalView) globalView.classList.add('active');
+    if (peersView) peersView.classList.remove('active');
+    if (threadView) threadView.classList.remove('active');
+    selectedPeer = null;
+    renderGlobalThread();
+  }
+
+  function showDirectPeersView() {
+    setModeTabActive('direct');
+    if (globalView) globalView.classList.remove('active');
     if (peersView) peersView.classList.add('active');
     if (threadView) threadView.classList.remove('active');
     selectedPeer = null;
@@ -1595,14 +1837,92 @@ function floatingChatWidgetScript() {
     renderThread();
   }
 
+  function showPeersView() {
+    showDirectPeersView();
+  }
+
   function showThreadView(peer) {
+    setModeTabActive('direct');
     selectedPeer = peer;
+    if (globalView) globalView.classList.remove('active');
     if (peersView) peersView.classList.remove('active');
     if (threadView) threadView.classList.add('active');
     threadTitle.textContent = peer.displayName + ' · ' + (peer.roleLabel || peer.role || 'Device');
     messageInput.disabled = false;
     sendBtn.disabled = false;
     renderThread();
+  }
+
+  function loadGlobalHistory() {
+    try { return JSON.parse(localStorage.getItem(GLOBAL_HISTORY_KEY) || '[]'); }
+    catch (e) { return []; }
+  }
+
+  function saveGlobalHistory(messages) {
+    localStorage.setItem(GLOBAL_HISTORY_KEY, JSON.stringify(messages));
+  }
+
+  function appendGlobalMessage(msg) {
+    const messages = loadGlobalHistory();
+    const exists = messages.some(function(m) {
+      return m.messageId && msg.messageId && m.messageId === msg.messageId;
+    });
+    if (!exists) {
+      messages.push(msg);
+      while (messages.length > 200) messages.shift();
+      saveGlobalHistory(messages);
+    }
+  }
+
+  function renderGlobalThread() {
+    if (!globalMessageList) return;
+    globalMessageList.innerHTML = '';
+    const msgs = loadGlobalHistory();
+    if (msgs.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'ar-chat-empty';
+      empty.textContent = 'No messages yet. Say hello to everyone!';
+      globalMessageList.appendChild(empty);
+      return;
+    }
+    msgs.forEach(function(msg) {
+      const isOut = msg.fromDeviceId && myDeviceId && msg.fromDeviceId === myDeviceId;
+      const bubble = document.createElement('div');
+      bubble.className = 'ar-chat-bubble ' + (isOut || msg.direction === 'out' ? 'out' : 'in');
+      if (!isOut && msg.direction !== 'out' && msg.fromDisplayName) {
+        const sender = document.createElement('div');
+        sender.className = 'ar-chat-sender-name';
+        sender.textContent = msg.fromDisplayName;
+        bubble.appendChild(sender);
+      }
+      const text = document.createElement('div');
+      text.textContent = msg.text;
+      bubble.appendChild(text);
+      const meta = document.createElement('div');
+      meta.className = 'ar-chat-bubble-meta';
+      meta.textContent = formatTime(msg.sentAt);
+      bubble.appendChild(meta);
+      globalMessageList.appendChild(bubble);
+    });
+    globalMessageList.scrollTop = globalMessageList.scrollHeight;
+  }
+
+  async function syncGlobalHistory() {
+    try {
+      const res = await fetch('/api/chat/global');
+      const data = await res.json();
+      (data.messages || []).forEach(function(msg) {
+        appendGlobalMessage({
+          messageId: msg.messageId,
+          fromDeviceId: msg.fromDeviceId,
+          fromDisplayName: msg.fromDisplayName,
+          text: msg.text,
+          sentAt: msg.sentAt,
+          direction: (msg.fromDeviceId && myDeviceId && msg.fromDeviceId === myDeviceId) ? 'out' : 'in'
+        });
+      });
+      if (chatMode === 'global') renderGlobalThread();
+    } catch (e) { /* ignore */ }
   }
 
   function loadHistory() {
@@ -1699,6 +2019,64 @@ function floatingChatWidgetScript() {
     } catch (e) { /* ignore */ }
   }
 
+  function handleIncomingGlobalMessage(msg) {
+    if (msg.fromDeviceId && myDeviceId && msg.fromDeviceId === myDeviceId) {
+      return;
+    }
+    appendGlobalMessage({
+      messageId: msg.messageId,
+      fromDeviceId: msg.fromDeviceId,
+      fromDisplayName: msg.fromDisplayName,
+      text: msg.text,
+      sentAt: msg.sentAt,
+      direction: 'in'
+    });
+    if (shouldAlertForGlobalMessage()) {
+      const preview = (msg.text || '').trim();
+      bumpUnread(msg.fromDisplayName || 'Someone', preview.slice(0, 80), true);
+    }
+    if (chatMode === 'global') renderGlobalThread();
+  }
+
+  function sendGlobalMessage() {
+    const activeWs = getActiveWs();
+    if (!activeWs) {
+      showChatError('Not connected to gateway.');
+      return;
+    }
+    const text = globalMessageInput.value.trim();
+    if (!text) return;
+    const clientMessageId = 'g-' + Date.now() + '-' + Math.random().toString(36).slice(2);
+    appendGlobalMessage({
+      clientMessageId: clientMessageId,
+      messageId: clientMessageId,
+      fromDeviceId: myDeviceId,
+      fromDisplayName: getDeviceName(),
+      direction: 'out',
+      text: text,
+      sentAt: Date.now(),
+      status: 'sending'
+    });
+    renderGlobalThread();
+    globalMessageInput.value = '';
+    activeWs.send(JSON.stringify({
+      type: 'GLOBAL_CHAT_SEND',
+      text: text,
+      clientMessageId: clientMessageId
+    }));
+  }
+
+  function updateGlobalOutgoingStatus(clientMessageId, messageId) {
+    const messages = loadGlobalHistory();
+    const idx = messages.findIndex(function(m) { return m.clientMessageId === clientMessageId; });
+    if (idx >= 0) {
+      messages[idx].messageId = messageId || messages[idx].messageId;
+      messages[idx].status = 'delivered';
+      saveGlobalHistory(messages);
+      renderGlobalThread();
+    }
+  }
+
   function handleIncomingMessage(msg) {
     const peerId = msg.fromDeviceId;
     appendMessage(peerId, {
@@ -1708,15 +2086,18 @@ function floatingChatWidgetScript() {
       sentAt: msg.sentAt,
       fromDisplayName: msg.fromDisplayName
     });
-    if (!panelOpen || !selectedPeer || selectedPeer.id !== peerId) {
-      unreadWhileClosed += 1;
-      updateFabBadge();
-      if (panelOpen) openPanel();
+    if (shouldAlertForDirectMessage(peerId)) {
+      const preview = (msg.text || '').trim();
+      bumpUnread(msg.fromDisplayName || 'Someone', preview.slice(0, 80), false);
     }
     if (selectedPeer && selectedPeer.id === peerId) renderThread();
   }
 
   function sendMessage() {
+    if (chatMode === 'global') {
+      sendGlobalMessage();
+      return;
+    }
     const activeWs = getActiveWs();
     if (!selectedPeer || !activeWs) {
       showChatError('Not connected to gateway.');
@@ -1805,6 +2186,19 @@ function floatingChatWidgetScript() {
       localStorage.setItem(DEVICE_ID_KEY, myDeviceId);
       pollPending();
       refreshPeers();
+      syncGlobalHistory();
+      return;
+    }
+    if (msg.type === 'GLOBAL_CHAT_MESSAGE') {
+      handleIncomingGlobalMessage(msg);
+      return;
+    }
+    if (msg.type === 'GLOBAL_CHAT_SENT') {
+      updateGlobalOutgoingStatus(msg.clientMessageId, msg.messageId);
+      return;
+    }
+    if (msg.type === 'GLOBAL_CHAT_ERROR') {
+      showChatError(msg.error || 'Global chat error');
       return;
     }
     if (msg.type === 'CHAT_MESSAGE') {
@@ -1837,14 +2231,25 @@ function floatingChatWidgetScript() {
     }
     if (fab) fab.addEventListener('click', openPanel);
     if (minimizeBtn) minimizeBtn.addEventListener('click', closePanel);
+    if (modeGlobalBtn) modeGlobalBtn.addEventListener('click', showGlobalView);
+    if (modeDirectBtn) modeDirectBtn.addEventListener('click', showDirectPeersView);
     if (backBtn) backBtn.addEventListener('click', showPeersView);
     if (refreshPeersBtn) refreshPeersBtn.addEventListener('click', refreshPeers);
     if (sendBtn) sendBtn.addEventListener('click', sendMessage);
+    if (globalSendBtn) globalSendBtn.addEventListener('click', sendGlobalMessage);
     if (messageInput) {
       messageInput.addEventListener('keydown', function(e) {
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           sendMessage();
+        }
+      });
+    }
+    if (globalMessageInput) {
+      globalMessageInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          sendGlobalMessage();
         }
       });
     }
@@ -1877,6 +2282,7 @@ function floatingChatWidgetScript() {
       myDeviceId = deviceId;
       pollPending();
       refreshPeers();
+      syncGlobalHistory();
     }
   };
 })();
@@ -3721,7 +4127,8 @@ app.get('/receive', (req, res) => {
             showAuthModal(msg.sessionId, msg.senderLabel);
             return;
           }
-          if (msg.type === 'CHAT_MESSAGE' || msg.type === 'CHAT_SENT' || msg.type === 'CHAT_ERROR') {
+          if (msg.type === 'CHAT_MESSAGE' || msg.type === 'CHAT_SENT' || msg.type === 'CHAT_ERROR' ||
+              msg.type === 'GLOBAL_CHAT_MESSAGE' || msg.type === 'GLOBAL_CHAT_SENT' || msg.type === 'GLOBAL_CHAT_ERROR') {
             if (window.AirReceiveFloatingChat) {
               AirReceiveFloatingChat.handleWsMessage(msg);
             }

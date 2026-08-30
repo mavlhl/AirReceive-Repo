@@ -67,6 +67,11 @@ data class ActiveTransferAuth(
     val message: String = "Enter this code on the receiver (/receive page on laptop or phone), then wait for approval."
 )
 
+data class ActiveChatContext(
+    val mode: ChatMode,
+    val peerDeviceId: String?
+)
+
 data class ServerState(
     val isRunning: Boolean = false,
     val serverUrl: String = "",
@@ -89,6 +94,12 @@ sealed interface ViewModelEvent {
     object TransferSuccess : ViewModelEvent
     data class SendSuccess(val photoCount: Int) : ViewModelEvent
     data class SaveGalleryResult(val saved: Int, val total: Int) : ViewModelEvent
+    data class ChatMessageReceived(
+        val senderName: String,
+        val preview: String,
+        val isGlobal: Boolean,
+        val peerDeviceId: String
+    ) : ViewModelEvent
     class Error(val message: String) : ViewModelEvent
 }
 
@@ -133,6 +144,11 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
     private var lockRefCount = 0
     private var lastSendProgressMs = 0L
     private val prefs = application.getSharedPreferences("airreceive_prefs", Context.MODE_PRIVATE)
+    private var activeChatContext: ActiveChatContext? = null
+
+    fun setActiveChatContext(context: ActiveChatContext?) {
+        activeChatContext = context
+    }
 
     private fun gatewayDeviceDisplayName(): String =
         prefs.getString("device_display_name", null)?.trim().orEmpty()
@@ -551,6 +567,9 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
     fun observeChatMessages(peerDeviceId: String): Flow<List<ChatMessage>> =
         chatRepository.observeMessagesForPeer(peerDeviceId)
 
+    fun observeGlobalChatMessages(): Flow<List<ChatMessage>> =
+        chatRepository.observeMessagesForPeer(ChatMessage.PEER_GLOBAL)
+
     fun markChatPeerRead(peerDeviceId: String) {
         viewModelScope.launch(Dispatchers.IO) {
             chatRepository.markPeerRead(peerDeviceId)
@@ -601,6 +620,50 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
+    fun sendGlobalChatMessage(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        val clientMessageId = "g-${System.currentTimeMillis()}-${UUID.randomUUID()}"
+        viewModelScope.launch {
+            chatRepository.insert(
+                ChatMessage(
+                    peerDeviceId = ChatMessage.PEER_GLOBAL,
+                    peerDisplayName = "Everyone",
+                    direction = ChatMessage.DIRECTION_OUT,
+                    text = trimmed,
+                    sentAt = System.currentTimeMillis(),
+                    messageId = clientMessageId,
+                    clientMessageId = clientMessageId,
+                    status = ChatMessage.STATUS_SENDING,
+                    isRead = true
+                )
+            )
+            val client = airReceiveGatewayClient
+            if (client == null) {
+                _eventFlow.emit(ViewModelEvent.Error("Gateway not connected. Enable gateway in Settings."))
+                return@launch
+            }
+            client.sendGlobalChatMessage(trimmed, clientMessageId)
+        }
+    }
+
+    fun syncGlobalChatHistory() {
+        val customUrl = _serverState.value.customUrl
+        if (customUrl.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            val messages = AirReceiveGatewaySender(getApplication(), customUrl).fetchGlobalChat()
+            for (msg in messages) {
+                persistIncomingGlobalChat(
+                    msg.messageId,
+                    msg.fromDeviceId,
+                    msg.fromDisplayName,
+                    msg.text,
+                    msg.sentAt
+                )
+            }
+        }
+    }
+
     private suspend fun persistIncomingChat(
         messageId: String,
         fromDeviceId: String,
@@ -621,6 +684,71 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
                 isRead = false
             )
         )
+        maybeNotifyIncomingChat(
+            senderName = fromDisplayName,
+            preview = text,
+            isGlobal = false,
+            peerDeviceId = fromDeviceId
+        )
+    }
+
+    private suspend fun persistIncomingGlobalChat(
+        messageId: String,
+        fromDeviceId: String,
+        fromDisplayName: String,
+        text: String,
+        sentAt: Long
+    ) {
+        if (chatRepository.findByMessageId(messageId) != null) return
+        val ownId = gatewayDeviceId()
+        val isOwn = !ownId.isNullOrBlank() && fromDeviceId == ownId
+        if (isOwn) return
+        chatRepository.insert(
+            ChatMessage(
+                peerDeviceId = ChatMessage.PEER_GLOBAL,
+                peerDisplayName = fromDisplayName,
+                direction = ChatMessage.DIRECTION_IN,
+                text = text,
+                sentAt = sentAt,
+                messageId = messageId,
+                status = ChatMessage.STATUS_DELIVERED,
+                isRead = false
+            )
+        )
+        maybeNotifyIncomingChat(
+            senderName = fromDisplayName,
+            preview = text,
+            isGlobal = true,
+            peerDeviceId = ChatMessage.PEER_GLOBAL
+        )
+    }
+
+    private suspend fun maybeNotifyIncomingChat(
+        senderName: String,
+        preview: String,
+        isGlobal: Boolean,
+        peerDeviceId: String
+    ) {
+        if (shouldSuppressChatAlert(isGlobal, peerDeviceId)) return
+        val trimmed = preview.trim()
+        val shortPreview = if (trimmed.length > 80) trimmed.take(77) + "…" else trimmed
+        _eventFlow.emit(
+            ViewModelEvent.ChatMessageReceived(
+                senderName = senderName,
+                preview = shortPreview,
+                isGlobal = isGlobal,
+                peerDeviceId = peerDeviceId
+            )
+        )
+    }
+
+    private fun shouldSuppressChatAlert(isGlobal: Boolean, peerDeviceId: String): Boolean {
+        val ctx = activeChatContext ?: return false
+        return when {
+            isGlobal -> ctx.mode == ChatMode.Global
+            ctx.mode == ChatMode.Direct && ctx.peerDeviceId == peerDeviceId -> true
+            else -> false
+        }
     }
 
     private suspend fun updateOutgoingChatStatus(
@@ -642,6 +770,17 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         if (clientMessageId.isNullOrBlank()) return
         val existing = chatRepository.findByClientMessageId(clientMessageId) ?: return
         chatRepository.update(existing.copy(status = ChatMessage.STATUS_FAILED))
+    }
+
+    private suspend fun updateGlobalOutgoingStatus(clientMessageId: String?, messageId: String) {
+        if (clientMessageId.isNullOrBlank()) return
+        val existing = chatRepository.findByClientMessageId(clientMessageId) ?: return
+        chatRepository.update(
+            existing.copy(
+                messageId = messageId.ifBlank { existing.messageId },
+                status = ChatMessage.STATUS_DELIVERED
+            )
+        )
     }
 
     /** Ensures the free hosted gateway is active when Send is used (default mode). */
@@ -877,6 +1016,7 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
                     passwordProtection = requirePassword,
                     onRegistered = { deviceId, _ ->
                         prefs.edit().putString("gateway_device_id", deviceId).apply()
+                        syncGlobalChatHistory()
                     },
                     onAuthRequired = { sessionId, senderLabel ->
                         runOnMain {
@@ -902,6 +1042,22 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
                         }
                     },
                     onChatError = { error, clientMessageId ->
+                        viewModelScope.launch {
+                            markOutgoingChatFailed(clientMessageId)
+                            _eventFlow.emit(ViewModelEvent.Error(error))
+                        }
+                    },
+                    onGlobalChatMessage = { messageId, fromDeviceId, fromDisplayName, text, sentAt ->
+                        viewModelScope.launch(Dispatchers.IO) {
+                            persistIncomingGlobalChat(messageId, fromDeviceId, fromDisplayName, text, sentAt)
+                        }
+                    },
+                    onGlobalChatSent = { clientMessageId, messageId ->
+                        viewModelScope.launch(Dispatchers.IO) {
+                            updateGlobalOutgoingStatus(clientMessageId, messageId)
+                        }
+                    },
+                    onGlobalChatError = { error, clientMessageId ->
                         viewModelScope.launch {
                             markOutgoingChatFailed(clientMessageId)
                             _eventFlow.emit(ViewModelEvent.Error(error))

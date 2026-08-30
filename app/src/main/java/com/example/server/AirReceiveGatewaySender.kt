@@ -172,6 +172,36 @@ class AirReceiveGatewaySender(
         }
     }
 
+    fun fetchGlobalChat(): List<GatewayChatMessage> {
+        val url = "${gatewayBaseUrl()}/api/chat/global"
+        val request = Request.Builder().url(url).get().build()
+        return try {
+            client.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return emptyList()
+                val bodyText = response.body?.string().orEmpty()
+                val json = JSONObject(bodyText)
+                val messages = json.optJSONArray("messages") ?: JSONArray()
+                buildList {
+                    for (i in 0 until messages.length()) {
+                        val item = messages.getJSONObject(i)
+                        add(
+                            GatewayChatMessage(
+                                messageId = item.getString("messageId"),
+                                fromDeviceId = item.getString("fromDeviceId"),
+                                fromDisplayName = item.optString("fromDisplayName", "Device"),
+                                text = item.getString("text"),
+                                sentAt = item.optLong("sentAt", System.currentTimeMillis())
+                            )
+                        )
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e("AirReceiveGatewaySender", "Failed to fetch global chat", e)
+            emptyList()
+        }
+    }
+
     fun fetchPendingChat(deviceId: String): List<GatewayChatMessage> {
         val url = "${gatewayBaseUrl()}/api/chat/pending/${java.net.URLEncoder.encode(deviceId, "UTF-8")}"
         val request = Request.Builder().url(url).get().build()

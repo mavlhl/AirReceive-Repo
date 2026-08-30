@@ -97,11 +97,18 @@ Android uploads via `POST /upload/batch` with `target=receiver` and `targetDevic
 
 ### Direct messages (gateway chat)
 
-Text-only **1:1 direct messages** between any online devices on the same gateway (Android app, iPhone Safari, laptop browser). File transfers still use **Send** / **Receive**; chat is separate.
+Text chat on the AirReceive gateway in two modes:
 
-**Android:** Open the **Chat** tab (between Send and Settings). The free hosted gateway is enabled automatically, same as Send. Pick an online peer, type a message, and tap **Send**. Chat history is stored **locally on your phone** (Room). An unread badge appears on the Chat tab when messages arrive while you are on another tab.
+- **Global** — one shared room; everyone connected to the same gateway sees and can send messages to all online devices.
+- **Direct** — 1:1 private messages between two devices (original DM behavior).
 
-**Browser:** Open any gateway page (`/`, `/receive`, `/send`, etc.) and click the green **Chat** button in the bottom-right corner, or use **Chat** in the top nav. History is saved in **localStorage** on that browser only.
+**Android:** Open the **Chat** tab. Use **Global** or **Direct** at the top. Global is the default. On **Direct**, you see a full-width peer list first; tap someone to open a **full-screen thread** (back returns to the list). Chat history is stored **locally on your phone** (Room).
+
+**New message alerts (Android):** When you are not actively viewing the conversation that received a message, the app plays a short chime, vibrates, and shows a toast. If the app is in the background, a **system notification** appears instead (requires notification permission on Android 13+). The Chat tab badge shows unread count only when you are on another tab.
+
+**Browser:** Open any gateway page and click the green **Chat** button (bottom-right). Use the **Global** tab for the shared room, or **Direct** for 1:1 messages (peer list → thread). History is saved in **localStorage** on that browser only.
+
+**New message alerts (browser):** When the chat panel is closed or you are viewing a different tab/thread, new messages increment the FAB badge, prefix the page title with `(N)`, play a short beep, and (if you granted permission) show a **browser notification** when the tab is in the background.
 
 **Delivery:** Messages deliver instantly when the recipient is connected to the gateway WebSocket. If they are offline, the gateway queues messages for up to **24 hours** and delivers them when they reconnect (`REGISTER` flush + `GET /api/chat/pending/:deviceId` fallback).
 

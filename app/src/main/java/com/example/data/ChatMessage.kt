@@ -20,6 +20,7 @@ data class ChatMessage(
         get() = direction == DIRECTION_OUT
 
     companion object {
+        const val PEER_GLOBAL = "__global__"
         const val DIRECTION_IN = "in"
         const val DIRECTION_OUT = "out"
         const val STATUS_SENDING = "sending"

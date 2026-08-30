@@ -89,7 +89,9 @@ import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.*
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.example.util.DonateLinks
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.ProcessLifecycleOwner
+import com.example.util.ChatNotificationHelper
 import com.example.util.rememberDarkThemePreference
 import com.example.util.GallerySaver
 import com.example.util.QrCodeGenerator
@@ -144,6 +146,29 @@ class MainActivity : ComponentActivity() {
                             showToast(
                                 "Saved ${event.saved} of ${event.total} photo${if (event.total == 1) "" else "s"} to Pictures/AirReceive"
                             )
+                        }
+                        is ViewModelEvent.ChatMessageReceived -> {
+                            val isForeground = ProcessLifecycleOwner.get()
+                                .lifecycle
+                                .currentState
+                                .isAtLeast(Lifecycle.State.RESUMED)
+                            if (isForeground) {
+                                playAirDropChime()
+                                triggerSuccessVibration()
+                                val label = if (event.isGlobal) {
+                                    "${event.senderName} (global)"
+                                } else {
+                                    event.senderName
+                                }
+                                showToast("$label: ${event.preview}")
+                            } else {
+                                ChatNotificationHelper.show(
+                                    context = this@MainActivity,
+                                    senderName = event.senderName,
+                                    preview = event.preview,
+                                    isGlobal = event.isGlobal
+                                )
+                            }
                         }
                         is ViewModelEvent.Error -> {
                             showToast(event.message)
