@@ -270,6 +270,13 @@ fun AirReceiveApp(
             )
         }
 
+        TransferPasswordDialogs(
+            serverState = serverState,
+            onSubmitPin = viewModel::submitTransferPin,
+            onDismissReceiverAuth = viewModel::dismissAuthRequest,
+            onCancelSenderAuth = viewModel::cancelTransferAuth
+        )
+
     selectedPhotoForView?.let { photo ->
         FullscreenPhotoViewer(
             modifier = Modifier
@@ -292,6 +299,75 @@ fun AirReceiveApp(
             }
         )
     }
+    }
+}
+
+@Composable
+fun TransferPasswordDialogs(
+    serverState: ServerState,
+    onSubmitPin: (String) -> Unit,
+    onDismissReceiverAuth: () -> Unit,
+    onCancelSenderAuth: () -> Unit
+) {
+    serverState.pendingAuthRequest?.let { pending ->
+        var pinInput by remember(pending.sessionId) { mutableStateOf("") }
+        AlertDialog(
+            onDismissRequest = onDismissReceiverAuth,
+            title = { Text("Incoming transfer") },
+            text = {
+                Column {
+                    Text(
+                        text = (pending.senderLabel ?: "A sender") + " wants to send files. Enter the code shown on their device.",
+                        fontSize = 14.sp
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    OutlinedTextField(
+                        value = pinInput,
+                        onValueChange = { if (it.length <= 6 && it.all { c -> c.isDigit() }) pinInput = it },
+                        label = { Text("6-digit code") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { onSubmitPin(pinInput) },
+                    enabled = pinInput.length == 6
+                ) { Text("Confirm") }
+            },
+            dismissButton = {
+                TextButton(onClick = onDismissReceiverAuth) { Text("Cancel") }
+            }
+        )
+    }
+
+    serverState.activeTransferAuth?.let { auth ->
+        AlertDialog(
+            onDismissRequest = onCancelSenderAuth,
+            title = { Text("Share this code") },
+            text = {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+                    Text(
+                        text = auth.message,
+                        fontSize = 14.sp,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = auth.pin,
+                        fontSize = 36.sp,
+                        fontWeight = FontWeight.Bold,
+                        letterSpacing = 8.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = onCancelSenderAuth) { Text("Cancel send") }
+            }
+        )
     }
 }
 

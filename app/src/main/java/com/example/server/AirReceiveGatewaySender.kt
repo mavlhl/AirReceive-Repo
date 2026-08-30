@@ -16,7 +16,8 @@ import java.util.concurrent.TimeUnit
 
 data class GatewayReceiverDevice(
     val id: String,
-    val displayName: String
+    val displayName: String,
+    val passwordProtection: Boolean = false
 )
 
 class AirReceiveGatewaySender(
@@ -131,7 +132,8 @@ class AirReceiveGatewaySender(
                         add(
                             GatewayReceiverDevice(
                                 id = item.getString("id"),
-                                displayName = item.optString("displayName", "Device")
+                                displayName = item.optString("displayName", "Device"),
+                                passwordProtection = item.optBoolean("passwordProtection", false)
                             )
                         )
                     }
@@ -176,6 +178,8 @@ class AirReceiveGatewaySender(
     fun uploadBatches(
         uris: List<Uri>,
         targetDeviceId: String? = null,
+        sessionId: String? = null,
+        uploadToken: String? = null,
         onTransferStarted: (label: String, totalSize: Long) -> Unit,
         onTransferProgress: (bytesRead: Long, totalBytes: Long) -> Unit,
         onTransferCompleted: (photoCount: Int) -> Unit,
@@ -213,6 +217,8 @@ class AirReceiveGatewaySender(
             uploadBatch(
                 uris = chunk,
                 targetDeviceId = targetDeviceId,
+                sessionId = sessionId,
+                uploadToken = uploadToken,
                 onTransferStarted = { _, _ -> },
                 onTransferProgress = { read, total ->
                     val overallRead = chunkBaseBytes + read
@@ -242,9 +248,19 @@ class AirReceiveGatewaySender(
         onTransferCompleted(filesCompleted)
     }
 
+    fun requestTransferAuth(targetDeviceId: String?, senderLabel: String?): TransferAuthSession {
+        return TransferAuthClient.requestAuth(client, gatewayBaseUrl(), targetDeviceId, senderLabel)
+    }
+
+    fun pollTransferAuth(sessionId: String): TransferAuthSession? {
+        return TransferAuthClient.pollAuth(client, gatewayBaseUrl(), sessionId)
+    }
+
     fun uploadBatch(
         uris: List<Uri>,
         targetDeviceId: String? = null,
+        sessionId: String? = null,
+        uploadToken: String? = null,
         onTransferStarted: (label: String, totalSize: Long) -> Unit,
         onTransferProgress: (bytesRead: Long, totalBytes: Long) -> Unit,
         onTransferCompleted: (photoCount: Int) -> Unit,
@@ -271,6 +287,12 @@ class AirReceiveGatewaySender(
             .addFormDataPart("target", "receiver")
         if (!targetDeviceId.isNullOrBlank()) {
             multipart.addFormDataPart("targetDeviceId", targetDeviceId)
+        }
+        if (!sessionId.isNullOrBlank()) {
+            multipart.addFormDataPart("sessionId", sessionId)
+        }
+        if (!uploadToken.isNullOrBlank()) {
+            multipart.addFormDataPart("uploadToken", uploadToken)
         }
 
         for ((uri, fileName, fileSize) in items) {

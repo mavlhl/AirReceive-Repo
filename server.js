@@ -9,8 +9,10 @@ const fs = require('fs');
 const MAX_BATCH_FILES = 50;
 const MAX_BATCH_BYTES = 100 * 1024 * 1024; // 100 MB
 const FILE_TTL_MS = 5 * 60 * 1000;
+const TRANSFER_SESSION_TTL_MS = 5 * 60 * 1000;
 
 const app = express();
+app.use(express.json());
 const server = http.createServer(app);
 
 const PORT = process.env.PORT || 8080;
@@ -26,8 +28,130 @@ const fileMap = new Map();
 // batchId -> { fileIds: string[], createdAt: number }
 const batchMap = new Map();
 
-// deviceId -> { ws, role: 'phone'|'receiver', displayName, connectedAt }
+// deviceId -> { ws, role, displayName, connectedAt, passwordProtection }
 const deviceRegistry = new Map();
+// sessionId -> transfer session
+const transferSessions = new Map();
+
+function generatePin() {
+  return String(Math.floor(100000 + Math.random() * 900000));
+}
+
+function getDeviceEntry(targetDeviceId) {
+  if (!targetDeviceId) return null;
+  const entry = deviceRegistry.get(targetDeviceId);
+  if (!entry || entry.ws.readyState !== WebSocket.OPEN) return null;
+  return entry;
+}
+
+function isPasswordProtectionRequired(targetDeviceId) {
+  const entry = getDeviceEntry(targetDeviceId);
+  return entry ? !!entry.passwordProtection : false;
+}
+
+function createTransferRequest(targetDeviceId, senderLabel) {
+  const entry = targetDeviceId ? getDeviceEntry(targetDeviceId) : null;
+  if (targetDeviceId && !entry) {
+    return { error: 'Target device is offline or not found.', status: 404 };
+  }
+
+  const sessionId = uuidv4();
+  const expiresAt = Date.now() + TRANSFER_SESSION_TTL_MS;
+  const passwordRequired = entry ? !!entry.passwordProtection : false;
+
+  if (!passwordRequired) {
+    const uploadToken = uuidv4();
+    transferSessions.set(sessionId, {
+      sessionId,
+      targetDeviceId,
+      status: 'approved',
+      uploadToken,
+      pin: null,
+      expiresAt,
+      senderLabel: senderLabel || null
+    });
+    return { passwordRequired: false, sessionId, uploadToken };
+  }
+
+  const pin = generatePin();
+  transferSessions.set(sessionId, {
+    sessionId,
+    targetDeviceId,
+    status: 'pending',
+    uploadToken: null,
+    pin,
+    expiresAt,
+    senderLabel: senderLabel || null
+  });
+
+  notifyDevice(targetDeviceId, JSON.stringify({
+    type: 'AUTH_REQUIRED',
+    sessionId,
+    senderLabel: senderLabel || 'A sender'
+  }));
+
+  console.log(`[Auth] PIN session ${sessionId} for device ${targetDeviceId}`);
+  return { passwordRequired: true, sessionId, pin };
+}
+
+function verifyTransferPin(sessionId, pin, targetDeviceId) {
+  const session = transferSessions.get(sessionId);
+  if (!session) {
+    return { ok: false, status: 404, error: 'Session not found.' };
+  }
+  if (Date.now() > session.expiresAt) {
+    transferSessions.delete(sessionId);
+    return { ok: false, status: 410, error: 'Session expired.' };
+  }
+  if (session.targetDeviceId && targetDeviceId && session.targetDeviceId !== targetDeviceId) {
+    return { ok: false, status: 403, error: 'Wrong receiver for this session.' };
+  }
+  if (String(pin).trim() !== String(session.pin)) {
+    return { ok: false, status: 401, error: 'Incorrect code.' };
+  }
+  session.status = 'approved';
+  session.uploadToken = uuidv4();
+  return { ok: true, status: 'approved', uploadToken: session.uploadToken };
+}
+
+function getTransferSessionStatus(sessionId) {
+  const session = transferSessions.get(sessionId);
+  if (!session) return { status: 'expired' };
+  if (Date.now() > session.expiresAt) {
+    transferSessions.delete(sessionId);
+    return { status: 'expired' };
+  }
+  if (session.status === 'approved') {
+    return { status: 'approved', uploadToken: session.uploadToken };
+  }
+  return { status: 'pending' };
+}
+
+function validateUploadToken(sessionId, uploadToken, targetDeviceId) {
+  if (!isPasswordProtectionRequired(targetDeviceId)) {
+    return { ok: true };
+  }
+  const sid = (sessionId || '').trim();
+  const token = (uploadToken || '').trim();
+  if (!sid || !token) {
+    return { ok: false, error: 'Transfer password required. Request authorization first.' };
+  }
+  const session = transferSessions.get(sid);
+  if (!session) {
+    return { ok: false, error: 'Session expired or not found.' };
+  }
+  if (Date.now() > session.expiresAt) {
+    transferSessions.delete(sid);
+    return { ok: false, error: 'Session expired.' };
+  }
+  if (session.status !== 'approved' || session.uploadToken !== token) {
+    return { ok: false, error: 'Invalid or unapproved transfer session.' };
+  }
+  if (session.targetDeviceId && targetDeviceId && session.targetDeviceId !== targetDeviceId) {
+    return { ok: false, error: 'Session target mismatch.' };
+  }
+  return { ok: true };
+}
 
 function getSocketsByRole(role) {
   const sockets = [];
@@ -89,7 +213,8 @@ function listDevices(roleFilter) {
     const item = {
       id,
       displayName: entry.displayName,
-      connectedAt: entry.connectedAt
+      connectedAt: entry.connectedAt,
+      passwordProtection: !!entry.passwordProtection
     };
     if (entry.role === 'receiver') receivers.push(item);
     else if (entry.role === 'phone') phones.push(item);
@@ -99,7 +224,7 @@ function listDevices(roleFilter) {
   return { receivers, phones };
 }
 
-function completeRegistration(ws, role, displayName, reconnectDeviceId) {
+function completeRegistration(ws, role, displayName, reconnectDeviceId, passwordProtection = false) {
   if (ws.deviceId) {
     deviceRegistry.delete(ws.deviceId);
   }
@@ -108,14 +233,21 @@ function completeRegistration(ws, role, displayName, reconnectDeviceId) {
   ws.deviceId = deviceId;
   ws.deviceRole = role;
   ws.isRegistered = true;
+  ws.passwordProtection = !!passwordProtection;
   deviceRegistry.set(deviceId, {
     ws,
     role,
     displayName: name,
-    connectedAt: Date.now()
+    connectedAt: Date.now(),
+    passwordProtection: !!passwordProtection
   });
   if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'REGISTERED', deviceId, displayName: name }));
+    ws.send(JSON.stringify({
+      type: 'REGISTERED',
+      deviceId,
+      displayName: name,
+      passwordProtection: !!passwordProtection
+    }));
   }
   console.log(`[WebSocket] Registered ${role} "${name}" (${deviceId})`);
   return deviceId;
@@ -146,8 +278,16 @@ function setupDeviceSocket(ws, role, label) {
           ws,
           role,
           msg.displayName,
-          msg.deviceId || null
+          msg.deviceId || null,
+          msg.passwordProtection
         );
+      } else if (msg.type === 'SET_PASSWORD_PROTECTION' && ws.isRegistered && ws.deviceId) {
+        const entry = deviceRegistry.get(ws.deviceId);
+        if (entry) {
+          entry.passwordProtection = !!msg.passwordProtection;
+          ws.passwordProtection = entry.passwordProtection;
+          console.log(`[WebSocket] ${ws.deviceId} passwordProtection=${entry.passwordProtection}`);
+        }
       }
     } catch (e) {
       console.warn(`[WebSocket] Invalid message from ${label}:`, e.message);
@@ -233,6 +373,11 @@ setInterval(() => {
       deleteBatch(batchId);
     }
   }
+  for (const [sessionId, session] of transferSessions.entries()) {
+    if (now > session.expiresAt) {
+      transferSessions.delete(sessionId);
+    }
+  }
 }, 60 * 1000);
 
 // Static assets (e.g. Buy Me a Coffee QR)
@@ -258,16 +403,51 @@ app.get('/api/status', (req, res) => {
   });
 });
 
+// Transfer password protection
+app.post('/api/transfer/request', (req, res) => {
+  const targetDeviceId = (req.body.targetDeviceId || '').trim() || null;
+  const senderLabel = (req.body.senderLabel || '').trim() || null;
+  const result = createTransferRequest(targetDeviceId, senderLabel);
+  if (result.error) {
+    return res.status(result.status || 400).json({ error: result.error });
+  }
+  res.json(result);
+});
+
+app.post('/api/transfer/verify', (req, res) => {
+  const sessionId = (req.body.sessionId || '').trim();
+  const pin = req.body.pin;
+  const targetDeviceId = (req.body.targetDeviceId || '').trim() || null;
+  if (!sessionId || pin === undefined || pin === null) {
+    return res.status(400).json({ error: 'sessionId and pin are required.' });
+  }
+  const result = verifyTransferPin(sessionId, pin, targetDeviceId);
+  if (!result.ok) {
+    return res.status(result.status || 400).json({ error: result.error });
+  }
+  res.json({ status: result.status, uploadToken: result.uploadToken });
+});
+
+app.get('/api/transfer/:sessionId', (req, res) => {
+  res.json(getTransferSessionStatus(req.params.sessionId));
+});
+
 // Upload route
 app.post('/upload', upload.single('file'), (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file provided' });
   }
 
-  const fileInfo = registerUploadedFile(req.file);
-  const fileId = fileInfo.id;
   const target = (req.body.target === 'receiver') ? 'receiver' : 'phone';
   const targetDeviceId = (req.body.targetDeviceId || '').trim() || null;
+  const authCheck = validateUploadToken(req.body.sessionId, req.body.uploadToken, targetDeviceId);
+  if (!authCheck.ok) {
+    try { if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
+    return res.status(403).json({ error: authCheck.error });
+  }
+
+  const fileInfo = registerUploadedFile(req.file);
+  const fileId = fileInfo.id;
   console.log(`[Upload] File received: ${fileInfo.name} (${fileInfo.size} bytes). ID: ${fileId}, target: ${target}, targetDeviceId: ${targetDeviceId || 'broadcast'}`);
 
   const notification = JSON.stringify({
@@ -333,6 +513,14 @@ app.post('/upload/batch', upload.array('files', MAX_BATCH_FILES), (req, res) => 
 
   const target = (req.body.target === 'receiver') ? 'receiver' : 'phone';
   const targetDeviceId = (req.body.targetDeviceId || '').trim() || null;
+  const authCheck = validateUploadToken(req.body.sessionId, req.body.uploadToken, targetDeviceId);
+  if (!authCheck.ok) {
+    for (const f of files) {
+      try { if (fs.existsSync(f.path)) fs.unlinkSync(f.path); } catch (e) { /* ignore */ }
+    }
+    return res.status(403).json({ error: authCheck.error });
+  }
+
   const batchId = uuidv4();
   const fileIds = [];
   const fileMeta = [];
@@ -467,6 +655,59 @@ app.get('/download/:id', (req, res) => {
   });
 });
 
+function transferAuthClientJs() {
+  return `
+    async function requestTransferAuth(targetDeviceId, senderLabel) {
+      const res = await fetch('/api/transfer/request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetDeviceId, senderLabel })
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Authorization request failed');
+      return data;
+    }
+    async function pollUntilTransferApproved(sessionId, onWaiting) {
+      const deadline = Date.now() + 5 * 60 * 1000;
+      while (Date.now() < deadline) {
+        const res = await fetch('/api/transfer/' + encodeURIComponent(sessionId));
+        const data = await res.json().catch(() => ({}));
+        if (data.status === 'approved' && data.uploadToken) {
+          return { sessionId, uploadToken: data.uploadToken };
+        }
+        if (data.status === 'expired') {
+          throw new Error('Transfer code expired. Try again.');
+        }
+        if (onWaiting) onWaiting();
+        await new Promise((r) => setTimeout(r, 1500));
+      }
+      throw new Error('Timed out waiting for receiver to enter the code.');
+    }
+    async function ensureTransferAuth(targetDeviceId, senderLabel, onPinShown, onWaiting) {
+      const auth = await requestTransferAuth(targetDeviceId, senderLabel);
+      if (!auth.passwordRequired) {
+        return { sessionId: auth.sessionId, uploadToken: auth.uploadToken };
+      }
+      if (onPinShown) onPinShown(auth.pin, auth.sessionId);
+      return pollUntilTransferApproved(auth.sessionId, onWaiting);
+    }
+  `;
+}
+
+function airReceiveLogoSvg(sizeClass = 'airreceive-logo') {
+  return `<svg class="${sizeClass}" viewBox="0 0 108 108" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <path fill="#007AFF" d="M54,20 A34,34 0 1,1 53.9,20 Z"/>
+    <path fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-opacity="0.35" d="M34,42 A24,24 0 0,1 74,42"/>
+    <path fill="none" stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="round" d="M40,48 A18,18 0 0,1 68,48"/>
+    <path fill="#FFFFFF" d="M54,52 L54,72 L68,72 L68,68 L58,68 L58,52 Z"/>
+    <path fill="#FFFFFF" fill-opacity="0.9" d="M46,56 L46,64 L50,64 L50,56 Z"/>
+  </svg>`;
+}
+
+function airReceiveFaviconLink() {
+  return '<link rel="icon" type="image/svg+xml" href="/docs/airreceive-logo.svg"><link rel="apple-touch-icon" href="/docs/airreceive-logo.svg">';
+}
+
 function macThemeBootScript() {
   return `(function(){try{var k='airreceive-theme';var t=localStorage.getItem(k);var d=t? t==='dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.setAttribute('data-theme',d?'dark':'light');var btn=document.getElementById('theme-toggle-btn');if(btn)btn.textContent=d?'☀️':'🌙';window.__toggleAirReceiveTheme=function(){var next=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',next);localStorage.setItem(k,next);if(btn)btn.textContent=next==='dark'?'☀️':'🌙';};}catch(e){}})();`;
 }
@@ -476,7 +717,7 @@ function macSiteHeaderHtml(activeNav) {
     <div class="site-chrome">
       <header class="site-header">
         <div class="site-brand">
-          <span class="site-logo" aria-hidden="true">◉</span>
+          ${airReceiveLogoSvg('site-logo-svg')}
           <div>
             <div class="site-title">AirReceive</div>
             <div class="site-subtitle">Support Maverick for a virtual cookie!</div>
@@ -584,12 +825,11 @@ function macDesignCss(accent = '#007aff') {
       margin-bottom: 10px;
     }
     .site-brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
-    .site-logo {
+    .site-logo-svg, .airreceive-logo {
       flex-shrink: 0;
-      width: 32px; height: 32px; border-radius: 8px;
-      background: var(--mac-blue); color: #fff;
-      display: inline-flex; align-items: center; justify-content: center;
-      font-size: 18px;
+      width: 36px;
+      height: 36px;
+      display: block;
     }
     .site-title { font-size: 17px; font-weight: 600; color: var(--text-main); line-height: 1.2; }
     .site-subtitle {
@@ -751,6 +991,7 @@ function gatewayPageHtml({ title, activeNav, accent = '#007aff', extraCss = '', 
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${airReceiveFaviconLink()}
   <title>${title}</title>
   <script>${macThemeBootScript()}</script>
   <style>
@@ -895,6 +1136,7 @@ app.get('/to-android', (req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${airReceiveFaviconLink()}
   <title>AirReceive — Send to Android</title>
   <script>${macThemeBootScript()}</script>
   <style>
@@ -912,18 +1154,14 @@ app.get('/to-android', (req, res) => {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      width: 64px;
-      height: 64px;
-      border-radius: 50%;
-      background: var(--mac-green);
-      box-shadow: 0 4px 16px color-mix(in srgb, var(--mac-green) 35%, transparent);
+      width: 72px;
+      height: 72px;
       margin-bottom: 16px;
     }
 
-    .logo-container svg {
-      width: 32px;
-      height: 32px;
-      fill: white;
+    .logo-container .airreceive-logo {
+      width: 72px;
+      height: 72px;
     }
 
     h1 { font-size: 24px; font-weight: 700; }
@@ -1121,10 +1359,7 @@ app.get('/to-android', (req, res) => {
   <div class="container to-android-page">
     <div class="card to-android-card">
       <div class="logo-container">
-        <!-- Photo/Image transfer vector icon -->
-        <svg viewBox="0 0 24 24">
-          <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>
-        </svg>
+        ${airReceiveLogoSvg()}
       </div>
 
       <h1>Send to Android</h1>
@@ -1160,6 +1395,12 @@ app.get('/to-android', (req, res) => {
         </div>
       </div>
 
+      <div id="pinBox" style="display:none; margin-top:16px; padding:16px; border-radius:12px; border:1px solid var(--border-color); text-align:center;">
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:8px;">Tell the Android receiver this code:</p>
+        <div id="pinDisplay" style="font-size:36px; font-weight:700; letter-spacing:8px; font-family:monospace;"></div>
+        <p id="pinWaitText" style="font-size:12px; color:var(--text-muted); margin-top:8px;">Waiting for receiver to confirm...</p>
+      </div>
+
       <div class="toast toast-success" id="successToast">
         🎉 Photo successfully transferred to your Android device!
       </div>
@@ -1190,6 +1431,7 @@ app.get('/to-android', (req, res) => {
   </div>
 
   <script>
+    ${transferAuthClientJs()}
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
     const imagePreview = document.getElementById('imagePreview');
@@ -1204,6 +1446,9 @@ app.get('/to-android', (req, res) => {
     const urlPlaceholder = document.getElementById('urlPlaceholder');
     const phoneListEl = document.getElementById('phoneList');
     const refreshPhonesBtn = document.getElementById('refreshPhonesBtn');
+    const pinBox = document.getElementById('pinBox');
+    const pinDisplay = document.getElementById('pinDisplay');
+    const pinWaitText = document.getElementById('pinWaitText');
 
     let selectedPhoneId = null;
 
@@ -1238,7 +1483,7 @@ app.get('/to-android', (req, res) => {
             updateDropZoneEnabled();
           });
           const text = document.createElement('span');
-          text.textContent = dev.displayName + ' — online';
+          text.textContent = dev.displayName + ' — online' + (dev.passwordProtection ? ' (password)' : '');
           row.appendChild(radio);
           row.appendChild(text);
           phoneListEl.appendChild(row);
@@ -1306,9 +1551,22 @@ app.get('/to-android', (req, res) => {
       uploadFile(file);
     }
 
-    function uploadFile(file) {
+    async function uploadFile(file) {
       hideToasts();
-      
+      pinBox.style.display = 'none';
+
+      try {
+        const auth = await ensureTransferAuth(
+          selectedPhoneId,
+          'Browser sender',
+          (pin) => {
+            pinBox.style.display = 'block';
+            pinDisplay.textContent = pin;
+            fileTransferName.textContent = 'Waiting for receiver to enter code...';
+          },
+          () => { pinWaitText.textContent = 'Still waiting for receiver...'; }
+        );
+
       progressContainer.style.display = 'block';
       fileTransferName.textContent = file.name;
       progressBar.style.width = '0%';
@@ -1318,6 +1576,8 @@ app.get('/to-android', (req, res) => {
       formData.append('file', file);
       formData.append('target', 'phone');
       formData.append('targetDeviceId', selectedPhoneId);
+      formData.append('sessionId', auth.sessionId);
+      formData.append('uploadToken', auth.uploadToken);
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/upload', true);
@@ -1333,6 +1593,7 @@ app.get('/to-android', (req, res) => {
 
       xhr.onload = () => {
         progressContainer.style.display = 'none';
+        pinBox.style.display = 'none';
         
         if (xhr.status === 200) {
           try {
@@ -1350,6 +1611,13 @@ app.get('/to-android', (req, res) => {
             if (j.error) err = j.error;
           } catch (e) { /* ignore */ }
           showError(err + ' Refresh the list and pick another device.');
+        } else if (xhr.status === 403) {
+          let err = 'Transfer not authorized.';
+          try {
+            const j = JSON.parse(xhr.responseText);
+            if (j.error) err = j.error;
+          } catch (e) { /* ignore */ }
+          showError(err);
         } else {
           showError('Server rejected file upload: ' + xhr.responseText);
         }
@@ -1357,10 +1625,16 @@ app.get('/to-android', (req, res) => {
 
       xhr.onerror = () => {
         progressContainer.style.display = 'none';
+        pinBox.style.display = 'none';
         showError('Network transfer failure occurred. Check your server.');
       };
 
       xhr.send(formData);
+      } catch (e) {
+        progressContainer.style.display = 'none';
+        pinBox.style.display = 'none';
+        showError(e.message || 'Authorization failed.');
+      }
     }
 
     function showSuccess() {
@@ -1427,6 +1701,7 @@ app.get('/send', (req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${airReceiveFaviconLink()}
   <title>AirReceive — Send files</title>
   <script>${macThemeBootScript()}</script>
   <style>
@@ -1479,12 +1754,18 @@ app.get('/send', (req, res) => {
       </div>
 
       <button type="button" class="send-btn" id="sendBtn" disabled>Send to selected device</button>
+      <div id="pinBox" style="display:none; margin-top:16px; padding:16px; border-radius:12px; border:1px solid var(--border-color); text-align:center;">
+        <p style="font-size:13px; color:var(--text-muted); margin-bottom:8px;">Tell the receiver this code:</p>
+        <div id="pinDisplay" style="font-size:36px; font-weight:700; letter-spacing:8px; font-family:monospace;"></div>
+        <p id="pinWaitText" style="font-size:12px; color:var(--text-muted); margin-top:8px;">Waiting for receiver to confirm...</p>
+      </div>
       <p class="progress" id="progressText"></p>
       <div class="toast-success" id="successToast"></div>
       <div class="toast-error" id="errorToast"></div>
     </div>
   </div>
   <script>
+    ${transferAuthClientJs()}
     const MAX_BATCH_FILES = ${MAX_BATCH_FILES};
     const MAX_BATCH_BYTES = ${MAX_BATCH_BYTES};
     const SENDER_NAME_KEY = 'airreceive_sender_name';
@@ -1497,6 +1778,9 @@ app.get('/send', (req, res) => {
     const errorToast = document.getElementById('errorToast');
     const senderNameInput = document.getElementById('senderName');
     const refreshBtn = document.getElementById('refreshBtn');
+    const pinBox = document.getElementById('pinBox');
+    const pinDisplay = document.getElementById('pinDisplay');
+    const pinWaitText = document.getElementById('pinWaitText');
 
     let selectedDeviceId = null;
     let pendingFiles = [];
@@ -1548,7 +1832,7 @@ app.get('/send', (req, res) => {
             updateSendEnabled();
           });
           const text = document.createElement('span');
-          text.textContent = dev.displayName + ' — online';
+          text.textContent = dev.displayName + ' — online' + (dev.passwordProtection ? ' (password)' : '');
           row.appendChild(radio);
           row.appendChild(text);
           deviceListEl.appendChild(row);
@@ -1599,9 +1883,21 @@ app.get('/send', (req, res) => {
       if (!selectedDeviceId || pendingFiles.length === 0) return;
       sendBtn.disabled = true;
       progressText.style.display = 'block';
+      pinBox.style.display = 'none';
       const chunks = chunkFiles(pendingFiles);
       let sentTotal = 0;
       try {
+        const senderLabel = senderNameInput.value.trim() || 'Web sender';
+        const auth = await ensureTransferAuth(
+          selectedDeviceId,
+          senderLabel,
+          (pin) => {
+            pinBox.style.display = 'block';
+            pinDisplay.textContent = pin;
+            progressText.textContent = 'Waiting for receiver to enter the code...';
+          },
+          () => { pinWaitText.textContent = 'Still waiting for receiver...'; }
+        );
         for (let i = 0; i < chunks.length; i++) {
           const chunk = chunks[i];
           progressText.textContent = chunks.length > 1
@@ -1610,6 +1906,8 @@ app.get('/send', (req, res) => {
           const formData = new FormData();
           formData.append('target', 'receiver');
           formData.append('targetDeviceId', selectedDeviceId);
+          formData.append('sessionId', auth.sessionId);
+          formData.append('uploadToken', auth.uploadToken);
           chunk.forEach((f) => formData.append('files', f));
           const res = await fetch('/upload/batch', { method: 'POST', body: formData });
           const data = await res.json().catch(() => ({}));
@@ -1617,6 +1915,7 @@ app.get('/send', (req, res) => {
             showError(data.error || 'Upload failed. Is the receiver still online?');
             sendBtn.disabled = false;
             progressText.style.display = 'none';
+            pinBox.style.display = 'none';
             return;
           }
           sentTotal += data.count || chunk.length;
@@ -1626,9 +1925,11 @@ app.get('/send', (req, res) => {
         fileInput.value = '';
         dropZone.querySelector('strong').textContent = 'Select files to send';
         updateSendEnabled();
+        pinBox.style.display = 'none';
       } catch (e) {
-        showError('Network error: ' + (e.message || 'Upload failed'));
+        showError(e.message || 'Network error');
         sendBtn.disabled = false;
+        pinBox.style.display = 'none';
       }
       progressText.style.display = 'none';
     });
@@ -1652,6 +1953,7 @@ app.get('/receive', (req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  ${airReceiveFaviconLink()}
   <title>AirReceive — Receive photos</title>
   <script>${macThemeBootScript()}</script>
   <style>
@@ -1811,6 +2113,45 @@ app.get('/receive', (req, res) => {
       margin: 12px 0;
     }
     .utility-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .password-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin: 12px 0;
+      font-size: 13px;
+      text-align: left;
+    }
+    .auth-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.55);
+      z-index: 500;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+    }
+    .auth-modal.visible { display: flex; }
+    .auth-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      padding: 24px;
+      max-width: 360px;
+      width: 100%;
+      text-align: center;
+    }
+    .auth-card h2 { font-size: 18px; margin-bottom: 8px; }
+    .auth-card p { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; }
+    .auth-card input {
+      width: 100%;
+      font-size: 24px;
+      letter-spacing: 8px;
+      text-align: center;
+      padding: 12px;
+      margin-bottom: 12px;
+    }
+    .auth-card .auth-actions { display: flex; gap: 8px; justify-content: center; }
   </style>
 </head>
 <body>
@@ -1835,6 +2176,11 @@ app.get('/receive', (req, res) => {
         <button type="button" class="utility-btn" id="wakeLockBtn">Keep screen awake</button>
       </div>
 
+      <label class="password-toggle">
+        <input type="checkbox" id="passwordProtectionToggle" />
+        Require password before accepting files
+      </label>
+
       <p class="waiting" id="waitingText">Waiting for files...</p>
 
       <div class="batch-wrap" id="batchWrap">
@@ -1853,6 +2199,18 @@ app.get('/receive', (req, res) => {
 
       <div class="toast-success" id="successToast"></div>
       <div class="toast-error" id="errorToast"></div>
+
+      <div class="auth-modal" id="authModal">
+        <div class="auth-card">
+          <h2>Incoming transfer</h2>
+          <p id="authSenderHint">A sender wants to send files. Enter the code shown on their device.</p>
+          <input type="text" id="authPinInput" inputmode="numeric" maxlength="6" placeholder="000000" autocomplete="one-time-code" />
+          <div class="auth-actions">
+            <button type="button" class="utility-btn" id="authCancelBtn">Cancel</button>
+            <button type="button" class="save-all-btn" id="authConfirmBtn">Confirm</button>
+          </div>
+        </div>
+      </div>
 
       <div class="instructions">
         <strong>How to use</strong>
@@ -1890,6 +2248,70 @@ app.get('/receive', (req, res) => {
 
     const DEVICE_NAME_KEY = 'airreceive_device_name';
     const DEVICE_ID_KEY = 'airreceive_device_id';
+    const PASSWORD_PROTECTION_KEY = 'airreceive_password_protection';
+
+    const passwordProtectionToggle = document.getElementById('passwordProtectionToggle');
+    const authModal = document.getElementById('authModal');
+    const authPinInput = document.getElementById('authPinInput');
+    const authSenderHint = document.getElementById('authSenderHint');
+    const authConfirmBtn = document.getElementById('authConfirmBtn');
+    const authCancelBtn = document.getElementById('authCancelBtn');
+    let pendingAuthSessionId = null;
+    let myDeviceId = null;
+
+    passwordProtectionToggle.checked = localStorage.getItem(PASSWORD_PROTECTION_KEY) === '1';
+    passwordProtectionToggle.addEventListener('change', () => {
+      const enabled = passwordProtectionToggle.checked;
+      localStorage.setItem(PASSWORD_PROTECTION_KEY, enabled ? '1' : '0');
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'SET_PASSWORD_PROTECTION', passwordProtection: enabled }));
+      }
+    });
+
+    function showAuthModal(sessionId, senderLabel) {
+      pendingAuthSessionId = sessionId;
+      authSenderHint.textContent = (senderLabel || 'A sender') + ' wants to send files. Enter the code shown on their device.';
+      authPinInput.value = '';
+      authModal.classList.add('visible');
+      authPinInput.focus();
+    }
+
+    function hideAuthModal() {
+      authModal.classList.remove('visible');
+      pendingAuthSessionId = null;
+      authPinInput.value = '';
+    }
+
+    authCancelBtn.addEventListener('click', hideAuthModal);
+
+    authConfirmBtn.addEventListener('click', async () => {
+      if (!pendingAuthSessionId) return;
+      const pin = authPinInput.value.trim();
+      if (!pin) {
+        showError('Enter the 6-digit code.');
+        return;
+      }
+      try {
+        const res = await fetch('/api/transfer/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: pendingAuthSessionId,
+            pin,
+            targetDeviceId: myDeviceId
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          showError(data.error || 'Incorrect code.');
+          return;
+        }
+        hideAuthModal();
+        showSuccess('Code accepted — receiving files...');
+      } catch (e) {
+        showError('Could not verify code: ' + (e.message || 'network error'));
+      }
+    });
 
     let wakeLock = null;
     let pingInterval = null;
@@ -2186,7 +2608,8 @@ app.get('/receive', (req, res) => {
         const reg = {
           type: 'REGISTER',
           displayName: getDeviceName(),
-          deviceId: localStorage.getItem(DEVICE_ID_KEY) || undefined
+          deviceId: localStorage.getItem(DEVICE_ID_KEY) || undefined,
+          passwordProtection: passwordProtectionToggle.checked
         };
         ws.send(JSON.stringify(reg));
         if (pingInterval) clearInterval(pingInterval);
@@ -2307,8 +2730,17 @@ app.get('/receive', (req, res) => {
           if (msg.type === 'REGISTERED') {
             localStorage.setItem(DEVICE_ID_KEY, msg.deviceId);
             localStorage.setItem(DEVICE_NAME_KEY, msg.displayName);
+            myDeviceId = msg.deviceId;
             deviceIdentity.style.display = 'block';
             myDeviceNameEl.textContent = msg.displayName;
+            if (typeof msg.passwordProtection === 'boolean') {
+              passwordProtectionToggle.checked = msg.passwordProtection;
+              localStorage.setItem(PASSWORD_PROTECTION_KEY, msg.passwordProtection ? '1' : '0');
+            }
+            return;
+          }
+          if (msg.type === 'AUTH_REQUIRED') {
+            showAuthModal(msg.sessionId, msg.senderLabel);
             return;
           }
           if (msg.type === 'NOTIFY_BATCH') {

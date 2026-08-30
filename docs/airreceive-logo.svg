@@ -1,0 +1,7 @@
+<svg viewBox="0 0 108 108" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="AirReceive">
+  <path fill="#007AFF" d="M54,20 A34,34 0 1,1 53.9,20 Z"/>
+  <path fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-opacity="0.35" d="M34,42 A24,24 0 0,1 74,42"/>
+  <path fill="none" stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="round" d="M40,48 A18,18 0 0,1 68,48"/>
+  <path fill="#FFFFFF" d="M54,52 L54,72 L68,72 L68,68 L58,68 L58,52 Z"/>
+  <path fill="#FFFFFF" fill-opacity="0.9" d="M46,56 L46,64 L50,64 L50,56 Z"/>
+</svg>

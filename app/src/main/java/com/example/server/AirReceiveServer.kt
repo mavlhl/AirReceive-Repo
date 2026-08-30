@@ -15,13 +15,15 @@ import java.util.concurrent.Executors
 class AirReceiveServer(
     private val context: Context,
     private val port: Int = 8080,
+    passwordProtection: Boolean = false,
+    private val onAuthRequired: ((sessionId: String, senderLabel: String?) -> Unit)? = null,
     private val onTransferStarted: (fileName: String, fileSize: Long) -> Unit,
     private val onTransferProgress: (bytesRead: Long, totalBytes: Long) -> Unit,
     private val onTransferCompleted: (
-        fileName: String, 
-        filePath: String, 
-        fileSize: Long, 
-        mimeType: String, 
+        fileName: String,
+        filePath: String,
+        fileSize: Long,
+        mimeType: String,
         senderIp: String
     ) -> Unit,
     private val onTransferFailed: (error: String) -> Unit
@@ -29,6 +31,11 @@ class AirReceiveServer(
     private var serverSocket: ServerSocket? = null
     private val serverExecutor = Executors.newCachedThreadPool()
     private var isRunning = false
+    private val localAuth = LocalTransferAuth(passwordProtection, onAuthRequired)
+
+    fun setPasswordProtection(enabled: Boolean) {
+        localAuth.setPasswordProtection(enabled)
+    }
 
     fun start(): Boolean {
         if (isRunning) return true
@@ -134,7 +141,29 @@ class AirReceiveServer(
                 }
             }
 
-            if (method == "GET" && (path == "/" || path == "/index.html")) {
+            if (method == "GET" && path == "/api/status") {
+                writeJsonResponse(outputStream, 200, localAuth.statusJson().toString())
+            } else if (method == "GET" && path.startsWith("/api/transfer/")) {
+                val sessionId = path.removePrefix("/api/transfer/").trim()
+                writeJsonResponse(outputStream, 200, localAuth.sessionStatus(sessionId).toString())
+            } else if (method == "POST" && path == "/api/transfer/request") {
+                val body = readRequestBody(inputStream, headers)
+                val senderLabel = try {
+                    org.json.JSONObject(body).optString("senderLabel").ifEmpty { null }
+                } catch (_: Exception) {
+                    null
+                }
+                writeJsonResponse(outputStream, 200, localAuth.createRequest(senderLabel).toString())
+            } else if (method == "POST" && path == "/api/transfer/verify") {
+                val body = readRequestBody(inputStream, headers)
+                val json = try { org.json.JSONObject(body) } catch (_: Exception) { org.json.JSONObject() }
+                val result = localAuth.verifyPin(
+                    json.optString("sessionId"),
+                    json.optString("pin")
+                )
+                val httpCode = if (result.has("error")) result.optInt("code", 400) else 200
+                writeJsonResponse(outputStream, httpCode, result.toString())
+            } else if (method == "GET" && (path == "/" || path == "/index.html")) {
                 val responseBytes = HTML_CONTENT.toByteArray(Charsets.UTF_8)
                 val httpResponse = buildString {
                     append("HTTP/1.1 200 OK\r\n")
@@ -148,6 +177,13 @@ class AirReceiveServer(
                 outputStream.flush()
             } else if (method == "POST" && path == "/upload") {
                 val senderIp = socket.inetAddress?.hostAddress ?: "Unknown iOS Device"
+                val sessionId = headers["x-session-id"]
+                val uploadToken = headers["x-upload-token"]
+                val authError = localAuth.validateUpload(sessionId, uploadToken)
+                if (authError != null) {
+                    writeTextResponse(outputStream, 403, authError)
+                    return
+                }
                 val rawFileName = headers["x-file-name"] ?: "photo.jpg"
                 val fileName = try {
                     URLDecoder.decode(rawFileName, "UTF-8")
@@ -264,6 +300,45 @@ class AirReceiveServer(
         }
     }
 
+    private fun readRequestBody(inputStream: java.io.InputStream, headers: Map<String, String>): String {
+        val contentLength = headers["content-length"]?.toIntOrNull() ?: 0
+        if (contentLength <= 0) return ""
+        val buffer = ByteArray(contentLength)
+        var read = 0
+        while (read < contentLength) {
+            val n = inputStream.read(buffer, read, contentLength - read)
+            if (n == -1) break
+            read += n
+        }
+        return String(buffer, 0, read, Charsets.UTF_8)
+    }
+
+    private fun writeJsonResponse(outputStream: java.io.OutputStream, statusCode: Int, json: String) {
+        val bytes = json.toByteArray(Charsets.UTF_8)
+        val response = buildString {
+            append("HTTP/1.1 $statusCode OK\r\n")
+            append("Content-Type: application/json; charset=utf-8\r\n")
+            append("Content-Length: ${bytes.size}\r\n")
+            append("Connection: close\r\n\r\n")
+        }.toByteArray(Charsets.UTF_8)
+        outputStream.write(response)
+        outputStream.write(bytes)
+        outputStream.flush()
+    }
+
+    private fun writeTextResponse(outputStream: java.io.OutputStream, statusCode: Int, message: String) {
+        val bytes = message.toByteArray(Charsets.UTF_8)
+        val response = buildString {
+            append("HTTP/1.1 $statusCode ${if (statusCode == 403) "Forbidden" else "Error"}\r\n")
+            append("Content-Type: text/plain; charset=utf-8\r\n")
+            append("Content-Length: ${bytes.size}\r\n")
+            append("Connection: close\r\n\r\n")
+        }.toByteArray(Charsets.UTF_8)
+        outputStream.write(response)
+        outputStream.write(bytes)
+        outputStream.flush()
+    }
+
     companion object {
         private val HTML_CONTENT = """
         <!DOCTYPE html>
@@ -300,29 +375,18 @@ class AirReceiveServer(
                     margin-bottom: 28px;
                     position: relative;
                     display: inline-block;
+                    animation: pulse 2.5s infinite;
                 }
-                .airdrop-icon {
+                .logo-container .airreceive-logo {
                     width: 88px;
                     height: 88px;
-                    background: radial-gradient(circle, #007aff 0%, #0056b3 100%);
-                    border-radius: 50%;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
+                    display: block;
                     margin: 0 auto;
-                    position: relative;
-                    animation: pulse 2.5s infinite;
-                    box-shadow: 0 4px 20px rgba(0, 122, 255, 0.4);
                 }
                 @keyframes pulse {
-                    0% { box-shadow: 0 0 0 0 rgba(0, 122, 255, 0.6); }
-                    70% { box-shadow: 0 0 0 20px rgba(0, 122, 255, 0); }
-                    100% { box-shadow: 0 0 0 0 rgba(0, 122, 255, 0); }
-                }
-                .airdrop-icon svg {
-                    width: 48px;
-                    height: 48px;
-                    fill: #ffffff;
+                    0% { filter: drop-shadow(0 0 0 rgba(0, 122, 255, 0.6)); }
+                    70% { filter: drop-shadow(0 0 20px rgba(0, 122, 255, 0)); }
+                    100% { filter: drop-shadow(0 0 0 rgba(0, 122, 255, 0)); }
                 }
                 h1 {
                     font-size: 26px;
@@ -445,25 +509,63 @@ class AirReceiveServer(
             <button type="button" class="theme-toggle-portal" onclick="window.__toggleAirReceiveTheme()">☀️</button>
             <div class="container">
                 <div class="logo-container">
-                    <div class="airdrop-icon">
-                        <svg viewBox="0 0 24 24">
-                            <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 14.59L11 18.59l-4.59-4.59L11 9.41l2 2 3.59-3.59 2.41 2.41-6 6zM12 4c.55 0 1 .45 1 1v4.59l4.59-4.59 1.41 1.41-6 6-6-6 1.41-1.41L11 9.59V5c0-.55.45-1 1-1z"/>
-                        </svg>
-                    </div>
+                    ${com.example.ui.theme.MacWebStyles.LOGO_SVG}
                 </div>
                 <h1>AirReceive Link</h1>
                 <p>Select and send photos instantly to the receiving Android device.</p>
                 
                 <button class="btn-select" onclick="document.getElementById('file-input').click()">Choose Photos</button>
                 <input type="file" id="file-input" multiple accept="image/*" onchange="handleFiles(this.files)">
+
+                <div id="pinBox" style="display:none; margin:16px 0; padding:16px; border-radius:12px; border:1px solid var(--mac-border); text-align:center;">
+                    <p style="font-size:13px; color:var(--text-muted); margin-bottom:8px;">Tell the Android receiver this code:</p>
+                    <div id="pinDisplay" style="font-size:32px; font-weight:700; letter-spacing:8px; font-family:monospace;"></div>
+                    <p id="pinWaitText" style="font-size:12px; color:var(--text-muted); margin-top:8px;">Waiting for receiver to confirm...</p>
+                </div>
                 
                 <div class="upload-queue" id="upload-queue"></div>
             </div>
 
             <script>
                 const queueContainer = document.getElementById('upload-queue');
+                const pinBox = document.getElementById('pinBox');
+                const pinDisplay = document.getElementById('pinDisplay');
+                const pinWaitText = document.getElementById('pinWaitText');
                 let uploadQueue = [];
                 let currentlyUploading = false;
+                let transferAuth = null;
+
+                async function ensureTransferAuth() {
+                    if (transferAuth) return transferAuth;
+                    const res = await fetch('/api/transfer/request', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ senderLabel: 'Browser sender' })
+                    });
+                    const data = await res.json();
+                    if (!res.ok) throw new Error(data.error || 'Auth failed');
+                    if (!data.passwordRequired) {
+                        transferAuth = { sessionId: data.sessionId, uploadToken: data.uploadToken };
+                        return transferAuth;
+                    }
+                    pinBox.style.display = 'block';
+                    pinDisplay.textContent = data.pin;
+                    const deadline = Date.now() + 5 * 60 * 1000;
+                    while (Date.now() < deadline) {
+                        const poll = await fetch('/api/transfer/' + encodeURIComponent(data.sessionId));
+                        const status = await poll.json();
+                        if (status.status === 'approved' && status.uploadToken) {
+                            transferAuth = { sessionId: data.sessionId, uploadToken: status.uploadToken };
+                            pinBox.style.display = 'none';
+                            return transferAuth;
+                        }
+                        if (status.status === 'expired') throw new Error('Code expired');
+                        pinWaitText.textContent = 'Still waiting for receiver...';
+                        await new Promise(r => setTimeout(r, 1500));
+                    }
+                    pinBox.style.display = 'none';
+                    throw new Error('Timed out waiting for receiver');
+                }
 
                 function formatBytes(bytes, decimals = 2) {
                     if (bytes === 0) return '0 Bytes';
@@ -518,6 +620,13 @@ class AirReceiveServer(
                     
                     const nextItem = uploadQueue.find(item => item.status === 'waiting');
                     if (!nextItem) return;
+
+                    try {
+                        await ensureTransferAuth();
+                    } catch (e) {
+                        nextItem.status = 'failed';
+                        return;
+                    }
                     
                     currentlyUploading = true;
                     nextItem.status = 'uploading';
@@ -565,6 +674,10 @@ class AirReceiveServer(
                         
                         xhr.setRequestHeader('X-File-Name', encodeURIComponent(item.name));
                         xhr.setRequestHeader('Content-Type', item.file.type || 'application/octet-stream');
+                        if (transferAuth) {
+                            xhr.setRequestHeader('X-Session-Id', transferAuth.sessionId);
+                            xhr.setRequestHeader('X-Upload-Token', transferAuth.uploadToken);
+                        }
                         
                         xhr.upload.onprogress = (e) => {
                             if (e.lengthComputable) {

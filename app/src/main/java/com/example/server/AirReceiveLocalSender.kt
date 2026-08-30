@@ -21,6 +21,7 @@ class AirReceiveLocalSender(
     }
 
     private val uploadUrl: String = normalizeUploadUrl(targetBaseUrl)
+    private val baseUrl: String = uploadUrl.removeSuffix("/upload")
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -39,8 +40,16 @@ class AirReceiveLocalSender(
         }
     }
 
+    fun requestTransferAuth(senderLabel: String?): TransferAuthSession =
+        TransferAuthClient.requestAuth(client, baseUrl, null, senderLabel)
+
+    fun pollTransferAuth(sessionId: String): TransferAuthSession? =
+        TransferAuthClient.pollAuth(client, baseUrl, sessionId)
+
     fun uploadBatch(
         uris: List<Uri>,
+        sessionId: String? = null,
+        uploadToken: String? = null,
         onTransferStarted: (label: String, totalSize: Long) -> Unit,
         onTransferProgress: (bytesRead: Long, totalBytes: Long) -> Unit,
         onTransferCompleted: (fileCount: Int) -> Unit,
@@ -91,12 +100,18 @@ class AirReceiveLocalSender(
             }
 
             val encodedName = URLEncoder.encode(fileName, "UTF-8")
-            val request = Request.Builder()
+            val requestBuilder = Request.Builder()
                 .url(uploadUrl)
                 .post(fileBody)
                 .header("X-File-Name", encodedName)
                 .header("Content-Type", mimeType)
-                .build()
+            if (!sessionId.isNullOrBlank()) {
+                requestBuilder.header("X-Session-Id", sessionId)
+            }
+            if (!uploadToken.isNullOrBlank()) {
+                requestBuilder.header("X-Upload-Token", uploadToken)
+            }
+            val request = requestBuilder.build()
 
             try {
                 client.newCall(request).execute().use { response ->

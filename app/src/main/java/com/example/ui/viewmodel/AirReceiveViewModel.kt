@@ -19,6 +19,8 @@ import com.example.server.AirReceiveGatewayClient
 import com.example.server.AirReceiveGatewaySender
 import com.example.server.AirReceiveLocalSender
 import com.example.server.GatewayReceiverDevice
+import com.example.server.TransferAuthClient
+import com.example.server.TransferAuthSession
 import com.example.util.GallerySaver
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
@@ -51,6 +53,18 @@ data class ActiveTransfer(
     val direction: TransferDirection = TransferDirection.INBOUND
 )
 
+data class PendingAuthRequest(
+    val sessionId: String,
+    val senderLabel: String? = null,
+    val isLocal: Boolean = false
+)
+
+data class ActiveTransferAuth(
+    val pin: String,
+    val sessionId: String,
+    val message: String = "Waiting for receiver to enter the code..."
+)
+
 data class ServerState(
     val isRunning: Boolean = false,
     val serverUrl: String = "",
@@ -61,7 +75,10 @@ data class ServerState(
     val gatewaySelection: GatewaySelection = GatewaySelection.HOSTED,
     val onlineReceivers: List<GatewayReceiverDevice> = emptyList(),
     val selectedReceiverId: String? = null,
-    val localSendTargetUrl: String = ""
+    val localSendTargetUrl: String = "",
+    val requireTransferPassword: Boolean = false,
+    val pendingAuthRequest: PendingAuthRequest? = null,
+    val activeTransferAuth: ActiveTransferAuth? = null
 )
 
 sealed interface ViewModelEvent {
@@ -79,6 +96,8 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         private const val GATEWAY_MODE_HOSTED = "hosted"
         private const val GATEWAY_MODE_LOCAL = "local"
         private const val GATEWAY_MODE_CUSTOM = "custom"
+        private const val PREF_REQUIRE_TRANSFER_PASSWORD = "require_transfer_password"
+        private const val TRANSFER_SESSION_TTL_MS = 5 * 60 * 1000L
 
         fun gatewaySelectionForUrl(url: String): GatewaySelection {
             val normalized = url.trim().removeSuffix("/")
@@ -164,9 +183,71 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
                 serverUrl = url,
                 customUrl = savedCustomUrl,
                 gatewaySelection = gatewaySelectionForUrl(savedCustomUrl),
-                localSendTargetUrl = savedLocalTarget
+                localSendTargetUrl = savedLocalTarget,
+                requireTransferPassword = prefs.getBoolean(PREF_REQUIRE_TRANSFER_PASSWORD, false)
             )
         }
+    }
+
+    fun setRequireTransferPassword(enabled: Boolean) {
+        prefs.edit().putBoolean(PREF_REQUIRE_TRANSFER_PASSWORD, enabled).apply()
+        _serverState.update { it.copy(requireTransferPassword = enabled) }
+        airReceiveServer?.setPasswordProtection(enabled)
+        airReceiveGatewayClient?.setPasswordProtection(enabled)
+    }
+
+    fun dismissAuthRequest() {
+        _serverState.update { it.copy(pendingAuthRequest = null) }
+    }
+
+    fun cancelTransferAuth() {
+        _serverState.update { it.copy(activeTransferAuth = null) }
+    }
+
+    fun submitTransferPin(pin: String) {
+        val pending = _serverState.value.pendingAuthRequest ?: return
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val baseUrl = if (pending.isLocal) {
+                        _serverState.value.serverUrl
+                    } else {
+                        _serverState.value.customUrl
+                    }
+                    val targetId = if (pending.isLocal) null else prefs.getString("gateway_device_id", null)
+                    val client = okhttp3.OkHttpClient()
+                    TransferAuthClient.verifyPin(client, baseUrl, pending.sessionId, pin, targetId)
+                }
+                _serverState.update { it.copy(pendingAuthRequest = null) }
+            } catch (e: Exception) {
+                _eventFlow.emit(ViewModelEvent.Error(e.message ?: "Incorrect code"))
+            }
+        }
+    }
+
+    private suspend fun resolveTransferAuth(
+        requestAuth: () -> TransferAuthSession,
+        pollAuth: (String) -> TransferAuthSession?
+    ): TransferAuthSession {
+        val auth = withContext(Dispatchers.IO) { requestAuth() }
+        if (!auth.passwordRequired) return auth
+        val pin = auth.pin ?: throw java.io.IOException("No transfer code received.")
+        runOnMain {
+            _serverState.update {
+                it.copy(activeTransferAuth = ActiveTransferAuth(pin = pin, sessionId = auth.sessionId))
+            }
+        }
+        val deadline = System.currentTimeMillis() + TRANSFER_SESSION_TTL_MS
+        while (System.currentTimeMillis() < deadline) {
+            val approved = withContext(Dispatchers.IO) { pollAuth(auth.sessionId) }
+            if (approved != null) {
+                runOnMain { _serverState.update { it.copy(activeTransferAuth = null) } }
+                return approved
+            }
+            kotlinx.coroutines.delay(1500)
+        }
+        runOnMain { _serverState.update { it.copy(activeTransferAuth = null) } }
+        throw java.io.IOException("Timed out waiting for receiver to enter the code.")
     }
 
     fun ensureLocalSendTargetDefault() {
@@ -234,9 +315,20 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
             acquireLocks()
             try {
                 val sender = AirReceiveLocalSender(getApplication(), targetUrl)
+                val auth = try {
+                    resolveTransferAuth(
+                        requestAuth = { sender.requestTransferAuth(gatewayDeviceDisplayName()) },
+                        pollAuth = { sender.pollTransferAuth(it) }
+                    )
+                } catch (e: Exception) {
+                    _eventFlow.emit(ViewModelEvent.Error(e.message ?: "Authorization failed"))
+                    return@launch
+                }
                 withContext(Dispatchers.IO) {
                     sender.uploadBatch(
                         uris = uris,
+                        sessionId = auth.sessionId,
+                        uploadToken = auth.uploadToken,
                         onTransferStarted = { label, size ->
                             runOnMain {
                                 _serverState.update {
@@ -587,9 +679,24 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
 
             // Start local HTTP server if local IP is present
             if (ip.isNotEmpty()) {
+                val requirePassword = prefs.getBoolean(PREF_REQUIRE_TRANSFER_PASSWORD, false)
                 airReceiveServer = AirReceiveServer(
                     context = getApplication(),
                     port = 8080,
+                    passwordProtection = requirePassword,
+                    onAuthRequired = { sessionId, senderLabel ->
+                        runOnMain {
+                            _serverState.update {
+                                it.copy(
+                                    pendingAuthRequest = PendingAuthRequest(
+                                        sessionId = sessionId,
+                                        senderLabel = senderLabel,
+                                        isLocal = true
+                                    )
+                                )
+                            }
+                        }
+                    },
                     onTransferStarted = onStart,
                     onTransferProgress = onProgress,
                     onTransferCompleted = onCompleted,
@@ -605,13 +712,28 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
 
             // Start remote WebSocket Client connection if custom gateway URL is specified
             if (customUrl.isNotEmpty()) {
+                val requirePassword = prefs.getBoolean(PREF_REQUIRE_TRANSFER_PASSWORD, false)
                 airReceiveGatewayClient = AirReceiveGatewayClient(
                     context = getApplication(),
                     serverUrl = customUrl,
                     displayName = gatewayDeviceDisplayName(),
                     storedDeviceId = prefs.getString("gateway_device_id", null),
+                    passwordProtection = requirePassword,
                     onRegistered = { deviceId, _ ->
                         prefs.edit().putString("gateway_device_id", deviceId).apply()
+                    },
+                    onAuthRequired = { sessionId, senderLabel ->
+                        runOnMain {
+                            _serverState.update {
+                                it.copy(
+                                    pendingAuthRequest = PendingAuthRequest(
+                                        sessionId = sessionId,
+                                        senderLabel = senderLabel,
+                                        isLocal = false
+                                    )
+                                )
+                            }
+                        }
                     },
                     onTransferStarted = onStart,
                     onTransferProgress = onProgress,
@@ -692,10 +814,21 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
             acquireLocks()
             try {
                 val sender = AirReceiveGatewaySender(getApplication(), customUrl)
+                val auth = try {
+                    resolveTransferAuth(
+                        requestAuth = { sender.requestTransferAuth(targetDeviceId, gatewayDeviceDisplayName()) },
+                        pollAuth = { sender.pollTransferAuth(it) }
+                    )
+                } catch (e: Exception) {
+                    _eventFlow.emit(ViewModelEvent.Error(e.message ?: "Authorization failed"))
+                    return@launch
+                }
                 withContext(Dispatchers.IO) {
                     sender.uploadBatches(
                         uris = uris,
                         targetDeviceId = targetDeviceId,
+                        sessionId = auth.sessionId,
+                        uploadToken = auth.uploadToken,
                         onTransferStarted = { label, size ->
                             runOnMain {
                                 _serverState.update {

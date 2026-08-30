@@ -14,7 +14,9 @@ class AirReceiveGatewayClient(
     private val serverUrl: String,
     private val displayName: String,
     private val storedDeviceId: String? = null,
+    private var passwordProtection: Boolean = false,
     private val onRegistered: ((deviceId: String, displayName: String) -> Unit)? = null,
+    private val onAuthRequired: ((sessionId: String, senderLabel: String?) -> Unit)? = null,
     private val onTransferStarted: (fileName: String, fileSize: Long) -> Unit,
     private val onTransferProgress: (bytesRead: Long, totalBytes: Long) -> Unit,
     private val onTransferCompleted: (
@@ -48,6 +50,14 @@ class AirReceiveGatewayClient(
         webSocket = null
     }
 
+    fun setPasswordProtection(enabled: Boolean) {
+        passwordProtection = enabled
+        webSocket?.send(JSONObject().apply {
+            put("type", "SET_PASSWORD_PROTECTION")
+            put("passwordProtection", enabled)
+        }.toString())
+    }
+
     private fun connect() {
         if (!isRunning) return
 
@@ -71,6 +81,7 @@ class AirReceiveGatewayClient(
                 val reg = JSONObject().apply {
                     put("type", "REGISTER")
                     put("displayName", displayName)
+                    put("passwordProtection", passwordProtection)
                     storedDeviceId?.let { put("deviceId", it) }
                 }
                 webSocket.send(reg.toString())
@@ -87,6 +98,14 @@ class AirReceiveGatewayClient(
                         Log.d("AirReceiveGateway", "Registered as $name ($deviceId)")
                         if (deviceId.isNotEmpty()) {
                             onRegistered?.invoke(deviceId, name)
+                        }
+                        return
+                    }
+                    if (type == "AUTH_REQUIRED") {
+                        val sessionId = json.optString("sessionId")
+                        val senderLabel = json.optString("senderLabel").ifEmpty { null }
+                        if (sessionId.isNotEmpty()) {
+                            onAuthRequired?.invoke(sessionId, senderLabel)
                         }
                         return
                     }

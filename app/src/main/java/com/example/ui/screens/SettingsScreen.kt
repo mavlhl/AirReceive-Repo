@@ -33,6 +33,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -203,6 +204,7 @@ fun SettingsScreen(
     onApplyHostedGateway: () -> Unit,
     onClearGateway: () -> Unit,
     onUpdateCustomUrl: (String) -> Unit,
+    onRequireTransferPasswordChange: (Boolean) -> Unit,
     onOpenSupport: () -> Unit
 ) {
     val isLocalOnly = state.gatewaySelection == GatewaySelection.NONE
@@ -241,6 +243,38 @@ fun SettingsScreen(
             onOpenSettings = { },
             showGatewaySettingsLink = false
         )
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = MacShapeMedium,
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.2f))
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "Require password to accept files",
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Senders show a code; you enter it before files are received.",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = state.requireTransferPassword,
+                    onCheckedChange = onRequireTransferPasswordChange
+                )
+            }
+        }
 
         if (isLocalOnly) {
             Text(

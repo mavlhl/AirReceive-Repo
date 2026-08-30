@@ -71,6 +71,7 @@ fun AirReceiveNavHost(
                     viewModel.setCustomUrl(url)
                     Toast.makeText(context, "Custom gateway URL saved!", Toast.LENGTH_SHORT).show()
                 },
+                onRequireTransferPasswordChange = { viewModel.setRequireTransferPassword(it) },
                 onOpenSupport = { navController.navigate(AppRoute.Support) { launchSingleTop = true } }
             )
         }

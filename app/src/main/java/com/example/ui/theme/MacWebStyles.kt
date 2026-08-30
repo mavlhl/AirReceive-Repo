@@ -58,4 +58,16 @@ object MacWebStyles {
         """
         (function(){try{var k='airreceive-theme';var t=localStorage.getItem(k);var d=t?t==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.setAttribute('data-theme',d?'dark':'light');var btn=document.querySelector('.theme-toggle-portal');if(btn)btn.textContent=d?'☀️':'🌙';window.__toggleAirReceiveTheme=function(){var n=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',n);localStorage.setItem(k,n);if(btn)btn.textContent=n==='dark'?'☀️':'🌙';};}catch(e){}})();
         """
+
+    /** Matches ic_launcher_foreground / ic_app_logo — blue circle, signal arcs, receive arrow. */
+    const val LOGO_SVG =
+        """
+        <svg class="airreceive-logo" viewBox="0 0 108 108" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+          <path fill="#007AFF" d="M54,20 A34,34 0 1,1 53.9,20 Z"/>
+          <path fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-opacity="0.35" d="M34,42 A24,24 0 0,1 74,42"/>
+          <path fill="none" stroke="#FFFFFF" stroke-width="3.5" stroke-linecap="round" d="M40,48 A18,18 0 0,1 68,48"/>
+          <path fill="#FFFFFF" d="M54,52 L54,72 L68,72 L68,68 L58,68 L58,52 Z"/>
+          <path fill="#FFFFFF" fill-opacity="0.9" d="M46,56 L46,64 L50,64 L50,56 Z"/>
+        </svg>
+        """
 }
