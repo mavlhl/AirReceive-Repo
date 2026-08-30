@@ -40,7 +40,7 @@ fun AirReceiveTopBar(
     modifier = modifier,
     navigationIcon = {
       Image(
-        painter = painterResource(R.drawable.ic_app_logo),
+        painter = painterResource(R.drawable.ic_launcher_foreground),
         contentDescription = "AirReceive logo",
         modifier = Modifier
           .padding(start = 4.dp)

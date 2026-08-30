@@ -143,6 +143,8 @@ class AirReceiveServer(
 
             if (method == "GET" && path == "/api/status") {
                 writeJsonResponse(outputStream, 200, localAuth.statusJson().toString())
+            } else if (method == "GET" && path == "/api/transfer/pending") {
+                writeJsonResponse(outputStream, 200, localAuth.pendingJson().toString())
             } else if (method == "GET" && path.startsWith("/api/transfer/")) {
                 val sessionId = path.removePrefix("/api/transfer/").trim()
                 writeJsonResponse(outputStream, 200, localAuth.sessionStatus(sessionId).toString())

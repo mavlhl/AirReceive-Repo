@@ -127,6 +127,13 @@ function getTransferSessionStatus(sessionId) {
   return { status: 'pending' };
 }
 
+function getTransferAuthFromRequest(req) {
+  return {
+    sessionId: String(req.body?.sessionId || req.headers['x-session-id'] || '').trim(),
+    uploadToken: String(req.body?.uploadToken || req.headers['x-upload-token'] || '').trim()
+  };
+}
+
 function validateUploadToken(sessionId, uploadToken, targetDeviceId) {
   if (!isPasswordProtectionRequired(targetDeviceId)) {
     return { ok: true };
@@ -428,6 +435,27 @@ app.post('/api/transfer/verify', (req, res) => {
   res.json({ status: result.status, uploadToken: result.uploadToken });
 });
 
+app.get('/api/transfer/pending/:deviceId', (req, res) => {
+  const deviceId = (req.params.deviceId || '').trim();
+  if (!deviceId) {
+    return res.status(400).json({ error: 'deviceId is required.' });
+  }
+  const pending = [];
+  for (const [sessionId, session] of transferSessions.entries()) {
+    if (
+      session.status === 'pending' &&
+      session.targetDeviceId === deviceId &&
+      Date.now() <= session.expiresAt
+    ) {
+      pending.push({
+        sessionId,
+        senderLabel: session.senderLabel || 'A sender'
+      });
+    }
+  }
+  res.json({ pending });
+});
+
 app.get('/api/transfer/:sessionId', (req, res) => {
   res.json(getTransferSessionStatus(req.params.sessionId));
 });
@@ -440,7 +468,8 @@ app.post('/upload', upload.single('file'), (req, res) => {
 
   const target = (req.body.target === 'receiver') ? 'receiver' : 'phone';
   const targetDeviceId = (req.body.targetDeviceId || '').trim() || null;
-  const authCheck = validateUploadToken(req.body.sessionId, req.body.uploadToken, targetDeviceId);
+  const transferAuth = getTransferAuthFromRequest(req);
+  const authCheck = validateUploadToken(transferAuth.sessionId, transferAuth.uploadToken, targetDeviceId);
   if (!authCheck.ok) {
     try { if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); } catch (e) { /* ignore */ }
     return res.status(403).json({ error: authCheck.error });
@@ -513,7 +542,8 @@ app.post('/upload/batch', upload.array('files', MAX_BATCH_FILES), (req, res) => 
 
   const target = (req.body.target === 'receiver') ? 'receiver' : 'phone';
   const targetDeviceId = (req.body.targetDeviceId || '').trim() || null;
-  const authCheck = validateUploadToken(req.body.sessionId, req.body.uploadToken, targetDeviceId);
+  const transferAuth = getTransferAuthFromRequest(req);
+  const authCheck = validateUploadToken(transferAuth.sessionId, transferAuth.uploadToken, targetDeviceId);
   if (!authCheck.ok) {
     for (const f of files) {
       try { if (fs.existsSync(f.path)) fs.unlinkSync(f.path); } catch (e) { /* ignore */ }
@@ -2255,10 +2285,24 @@ app.get('/receive', (req, res) => {
 
     function showAuthModal(sessionId, senderLabel) {
       pendingAuthSessionId = sessionId;
-      authSenderHint.textContent = (senderLabel || 'A sender') + ' wants to send files. Enter the code shown on their device.';
+      authSenderHint.textContent = (senderLabel || 'A sender') + ' wants to send files. Enter the code shown on the Android sender.';
       authPinInput.value = '';
       authModal.classList.add('visible');
       authPinInput.focus();
+    }
+
+    async function pollPendingAuth() {
+      if (!myDeviceId || !passwordProtectionToggle.checked) return;
+      if (pendingAuthSessionId && authModal.classList.contains('visible')) return;
+      try {
+        const res = await fetch('/api/transfer/pending/' + encodeURIComponent(myDeviceId));
+        const data = await res.json().catch(() => ({}));
+        const pending = data.pending || [];
+        if (pending.length > 0) {
+          const first = pending[0];
+          showAuthModal(first.sessionId, first.senderLabel);
+        }
+      } catch (e) { /* ignore */ }
     }
 
     function hideAuthModal() {
@@ -2722,6 +2766,7 @@ app.get('/receive', (req, res) => {
               passwordProtectionToggle.checked = msg.passwordProtection;
               localStorage.setItem(PASSWORD_PROTECTION_KEY, msg.passwordProtection ? '1' : '0');
             }
+            pollPendingAuth();
             return;
           }
           if (msg.type === 'AUTH_REQUIRED') {
@@ -2747,6 +2792,10 @@ app.get('/receive', (req, res) => {
     }
 
     connect();
+
+    setInterval(() => {
+      if (!document.hidden) pollPendingAuth();
+    }, 2000);
   </script>
   </div>
   </div>

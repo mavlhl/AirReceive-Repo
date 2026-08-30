@@ -92,6 +92,23 @@ class LocalTransferAuth(
         }
     }
 
+    fun pendingJson(): JSONObject {
+        purgeExpired()
+        val pending = org.json.JSONArray()
+        val now = System.currentTimeMillis()
+        for ((sessionId, session) in sessions) {
+            if (session.status == "pending" && now <= session.expiresAt) {
+                pending.put(
+                    JSONObject().apply {
+                        put("sessionId", sessionId)
+                        put("senderLabel", session.senderLabel ?: "A sender")
+                    }
+                )
+            }
+        }
+        return JSONObject().put("pending", pending)
+    }
+
     fun validateUpload(sessionId: String?, uploadToken: String?): String? {
         if (!passwordProtection) return null
         val sid = sessionId?.trim().orEmpty()

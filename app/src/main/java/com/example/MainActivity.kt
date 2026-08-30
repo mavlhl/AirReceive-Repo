@@ -1014,8 +1014,11 @@ fun LocalWifiSendPanel(
 fun SendToIphonePanel(
     receiveUrl: String,
     onlineReceivers: List<GatewayReceiverDevice>,
+    onlinePhones: List<GatewayReceiverDevice>,
     selectedReceiverId: String?,
+    selectedPhoneId: String?,
     onSelectReceiver: (String?) -> Unit,
+    onSelectPhone: (String?) -> Unit,
     onRefreshReceivers: () -> Unit,
     onSendPhotos: (List<Uri>) -> Unit
 ) {
@@ -1027,7 +1030,7 @@ fun SendToIphonePanel(
             500
         }
     }
-    val canSend = selectedReceiverId != null
+    val canSend = selectedReceiverId != null || selectedPhoneId != null
     val pickFilesLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenMultipleDocuments()
     ) { uris ->
@@ -1067,7 +1070,7 @@ fun SendToIphonePanel(
             )
             Spacer(modifier = Modifier.height(12.dp))
             Text(
-                text = "1. On the target PC or phone, open the receive page and keep it in the foreground.\n2. Pick the device below, then send any number of photos or files (large selections upload in batches).",
+                text = "1. On the target PC, phone browser, or Android device, open receive mode and keep the app or tab in the foreground.\n2. Pick a device below, then send any number of photos or files (large selections upload in batches).",
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.fillMaxWidth()
@@ -1090,21 +1093,56 @@ fun SendToIphonePanel(
                 }
             }
 
-            if (onlineReceivers.isEmpty()) {
+            if (onlineReceivers.isEmpty() && onlinePhones.isEmpty()) {
                 Text(
-                    text = "No receivers online. Open /receive on the target device, then tap Refresh.",
+                    text = "No devices online. Open /receive on a browser or enable gateway on another Android phone, then tap Refresh.",
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.fillMaxWidth()
                 )
             } else {
-                onlineReceivers.forEach { device ->
-                    GatewayOptionRow(
-                        label = device.displayName,
-                        subtitle = "Online — tap to select",
-                        selected = device.id == selectedReceiverId,
-                        onClick = { onSelectReceiver(device.id) }
+                if (onlineReceivers.isNotEmpty()) {
+                    Text(
+                        text = "Browsers (/receive)",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth()
                     )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    onlineReceivers.forEach { device ->
+                        GatewayOptionRow(
+                            label = device.displayName,
+                            subtitle = buildString {
+                                append("Online")
+                                if (device.passwordProtection) append(" — password required")
+                            },
+                            selected = device.id == selectedReceiverId,
+                            onClick = { onSelectReceiver(device.id) }
+                        )
+                    }
+                }
+                if (onlinePhones.isNotEmpty()) {
+                    if (onlineReceivers.isNotEmpty()) Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "Android phones",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    onlinePhones.forEach { device ->
+                        GatewayOptionRow(
+                            label = device.displayName,
+                            subtitle = buildString {
+                                append("Online")
+                                if (device.passwordProtection) append(" — password required")
+                            },
+                            selected = device.id == selectedPhoneId,
+                            onClick = { onSelectPhone(device.id) }
+                        )
+                    }
                 }
             }
 

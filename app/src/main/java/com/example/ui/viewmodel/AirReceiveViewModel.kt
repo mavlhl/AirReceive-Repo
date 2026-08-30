@@ -62,7 +62,7 @@ data class PendingAuthRequest(
 data class ActiveTransferAuth(
     val pin: String,
     val sessionId: String,
-    val message: String = "Waiting for receiver to enter the code..."
+    val message: String = "Enter this code on the receiver (/receive page on laptop or phone), then wait for approval."
 )
 
 data class ServerState(
@@ -74,7 +74,9 @@ data class ServerState(
     val customUrl: String = "",
     val gatewaySelection: GatewaySelection = GatewaySelection.HOSTED,
     val onlineReceivers: List<GatewayReceiverDevice> = emptyList(),
+    val onlinePhones: List<GatewayReceiverDevice> = emptyList(),
     val selectedReceiverId: String? = null,
+    val selectedPhoneId: String? = null,
     val localSendTargetUrl: String = "",
     val requireTransferPassword: Boolean = false,
     val pendingAuthRequest: PendingAuthRequest? = null,
@@ -122,6 +124,8 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
     private var airReceiveGatewayClient: AirReceiveGatewayClient? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var pendingAuthPollJob: kotlinx.coroutines.Job? = null
+    private val pendingAuthHttp = okhttp3.OkHttpClient()
     private var lockRefCount = 0
     private var lastSendProgressMs = 0L
     private val prefs = application.getSharedPreferences("airreceive_prefs", Context.MODE_PRIVATE)
@@ -194,6 +198,15 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         _serverState.update { it.copy(requireTransferPassword = enabled) }
         airReceiveServer?.setPasswordProtection(enabled)
         airReceiveGatewayClient?.setPasswordProtection(enabled)
+        if (enabled) {
+            if (!_serverState.value.isRunning) {
+                startServer()
+            } else {
+                startPendingAuthPolling()
+            }
+        } else {
+            stopPendingAuthPolling()
+        }
     }
 
     fun dismissAuthRequest() {
@@ -230,7 +243,12 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         pollAuth: (String) -> TransferAuthSession?
     ): TransferAuthSession {
         val auth = withContext(Dispatchers.IO) { requestAuth() }
-        if (!auth.passwordRequired) return auth
+        if (!auth.passwordRequired) {
+            if (auth.uploadToken.isBlank()) {
+                throw java.io.IOException("Transfer authorization missing. Try again.")
+            }
+            return auth
+        }
         val pin = auth.pin ?: throw java.io.IOException("No transfer code received.")
         runOnMain {
             _serverState.update {
@@ -241,6 +259,9 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         while (System.currentTimeMillis() < deadline) {
             val approved = withContext(Dispatchers.IO) { pollAuth(auth.sessionId) }
             if (approved != null) {
+                if (approved.uploadToken.isBlank()) {
+                    throw java.io.IOException("Transfer was not approved. Check the code on the receiver.")
+                }
                 runOnMain { _serverState.update { it.copy(activeTransferAuth = null) } }
                 return approved
             }
@@ -746,6 +767,7 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
 
             if (serverStarted) {
                 _serverState.update { it.copy(isRunning = true) }
+                startPendingAuthPolling()
             } else {
                 releaseLocks()
                 _eventFlow.emit(ViewModelEvent.Error("Failed to initialize server. Ensure network is active."))
@@ -754,6 +776,7 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
     }
 
     fun stopServer() {
+        stopPendingAuthPolling()
         airReceiveServer?.stop()
         airReceiveServer = null
         airReceiveGatewayClient?.stop()
@@ -773,22 +796,124 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
         val customUrl = _serverState.value.customUrl
         if (customUrl.isEmpty()) return
         viewModelScope.launch {
-            val receivers = withContext(Dispatchers.IO) {
-                AirReceiveGatewaySender(getApplication(), customUrl).fetchOnlineReceivers()
-            }
+            val sender = AirReceiveGatewaySender(getApplication(), customUrl)
+            val receivers = withContext(Dispatchers.IO) { sender.fetchOnlineReceivers() }
+            val phones = withContext(Dispatchers.IO) { sender.fetchOnlinePhones() }
             _serverState.update { state ->
-                val selected = state.selectedReceiverId
-                val stillValid = selected != null && receivers.any { it.id == selected }
+                val selectedReceiver = state.selectedReceiverId
+                val selectedPhone = state.selectedPhoneId
+                val receiverStillValid = selectedReceiver != null && receivers.any { it.id == selectedReceiver }
+                val phoneStillValid = selectedPhone != null && phones.any { it.id == selectedPhone }
                 state.copy(
                     onlineReceivers = receivers,
-                    selectedReceiverId = if (stillValid) selected else receivers.singleOrNull()?.id
+                    onlinePhones = phones,
+                    selectedReceiverId = when {
+                        receiverStillValid -> selectedReceiver
+                        selectedPhone != null -> null
+                        else -> receivers.singleOrNull()?.id
+                    },
+                    selectedPhoneId = when {
+                        phoneStillValid -> selectedPhone
+                        selectedReceiver != null -> null
+                        else -> phones.singleOrNull()?.id
+                    }
                 )
             }
         }
     }
 
     fun selectReceiver(deviceId: String?) {
-        _serverState.update { it.copy(selectedReceiverId = deviceId) }
+        _serverState.update {
+            it.copy(
+                selectedReceiverId = deviceId,
+                selectedPhoneId = if (deviceId != null) null else it.selectedPhoneId
+            )
+        }
+    }
+
+    fun selectPhone(deviceId: String?) {
+        _serverState.update {
+            it.copy(
+                selectedPhoneId = deviceId,
+                selectedReceiverId = if (deviceId != null) null else it.selectedReceiverId
+            )
+        }
+    }
+
+    private fun startPendingAuthPolling() {
+        if (!_serverState.value.requireTransferPassword) return
+        pendingAuthPollJob?.cancel()
+        pendingAuthPollJob = viewModelScope.launch {
+            while (true) {
+                kotlinx.coroutines.delay(2000)
+                if (!_serverState.value.requireTransferPassword || !_serverState.value.isRunning) continue
+                if (_serverState.value.pendingAuthRequest != null) continue
+                pollForPendingIncomingAuth()
+            }
+        }
+    }
+
+    private fun stopPendingAuthPolling() {
+        pendingAuthPollJob?.cancel()
+        pendingAuthPollJob = null
+    }
+
+    private suspend fun pollForPendingIncomingAuth() {
+        val state = _serverState.value
+        val gatewayDeviceId = prefs.getString("gateway_device_id", null)
+        val customUrl = state.customUrl
+        if (!gatewayDeviceId.isNullOrBlank() && customUrl.isNotEmpty()) {
+            try {
+                val pending = withContext(Dispatchers.IO) {
+                    TransferAuthClient.fetchGatewayPending(pendingAuthHttp, customUrl, gatewayDeviceId)
+                }
+                if (pending != null) {
+                    runOnMain {
+                        if (_serverState.value.pendingAuthRequest == null) {
+                            _serverState.update {
+                                it.copy(
+                                    pendingAuthRequest = PendingAuthRequest(
+                                        sessionId = pending.sessionId,
+                                        senderLabel = pending.senderLabel,
+                                        isLocal = false
+                                    )
+                                )
+                            }
+                        }
+                    }
+                    return
+                }
+            } catch (_: Exception) { /* ignore */ }
+        }
+
+        val localBase = localServerBaseUrl(state)
+        if (localBase != null) {
+            try {
+                val pending = withContext(Dispatchers.IO) {
+                    TransferAuthClient.fetchLocalPending(pendingAuthHttp, localBase)
+                }
+                if (pending != null) {
+                    runOnMain {
+                        if (_serverState.value.pendingAuthRequest == null) {
+                            _serverState.update {
+                                it.copy(
+                                    pendingAuthRequest = PendingAuthRequest(
+                                        sessionId = pending.sessionId,
+                                        senderLabel = pending.senderLabel,
+                                        isLocal = true
+                                    )
+                                )
+                            }
+                        }
+                    }
+                }
+            } catch (_: Exception) { /* ignore */ }
+        }
+    }
+
+    private fun localServerBaseUrl(state: ServerState): String? {
+        if (state.ipAddress.isEmpty()) return null
+        return "http://${state.ipAddress}:8080"
     }
 
     fun sendPhotosToGateway(uris: List<Uri>) {
@@ -799,11 +924,15 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
             }
             return
         }
-        val targetDeviceId = _serverState.value.selectedReceiverId
+        val state = _serverState.value
+        val targetDeviceId = state.selectedPhoneId ?: state.selectedReceiverId
+        val uploadTarget = if (state.selectedPhoneId != null) "phone" else "receiver"
         if (targetDeviceId.isNullOrEmpty()) {
             viewModelScope.launch {
                 _eventFlow.emit(
-                    ViewModelEvent.Error("Select a receiver device first. Open /receive on the target PC or phone, then tap Refresh.")
+                    ViewModelEvent.Error(
+                        "Select a target device first. Open /receive on a browser or enable gateway on another Android phone, then tap Refresh."
+                    )
                 )
             }
             return
@@ -827,6 +956,7 @@ class AirReceiveViewModel(application: Application) : AndroidViewModel(applicati
                     sender.uploadBatches(
                         uris = uris,
                         targetDeviceId = targetDeviceId,
+                        uploadTarget = uploadTarget,
                         sessionId = auth.sessionId,
                         uploadToken = auth.uploadToken,
                         onTransferStarted = { label, size ->

@@ -264,7 +264,7 @@ fun SettingsScreen(
                         fontWeight = FontWeight.SemiBold
                     )
                     Text(
-                        text = "Senders show a code; you enter it before files are received.",
+                        text = "Browsers, PCs, and other Android devices must enter a code you approve before files arrive (gateway and same Wi‑Fi).",
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

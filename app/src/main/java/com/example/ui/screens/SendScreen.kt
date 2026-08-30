@@ -59,8 +59,11 @@ fun SendScreen(
                 SendToIphonePanel(
                     receiveUrl = receiveUrl,
                     onlineReceivers = serverState.onlineReceivers,
+                    onlinePhones = serverState.onlinePhones,
                     selectedReceiverId = serverState.selectedReceiverId,
+                    selectedPhoneId = serverState.selectedPhoneId,
                     onSelectReceiver = { viewModel.selectReceiver(it) },
+                    onSelectPhone = { viewModel.selectPhone(it) },
                     onRefreshReceivers = { viewModel.refreshReceivers() },
                     onSendPhotos = onSendPhotosGateway
                 )

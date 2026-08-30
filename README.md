@@ -98,9 +98,13 @@ Android uploads via `POST /upload/batch` with `target=receiver` and `targetDevic
 Receivers can require a short pairing code before any files are accepted:
 
 1. **Web receiver:** On `/receive`, enable **Require password before accepting files**.
-2. **Android receiver:** In **Settings**, enable **Require password to accept files** (applies to local Wi‑Fi and gateway receive).
+2. **Android receiver:** In **Settings**, enable **Require password to accept files** (gateway receive from browsers/other Android devices, plus local Wi‑Fi portal).
 3. **Sender** picks files and starts send — a **6-digit code** appears on the sender’s screen (Android app or browser `/send` / `/to-android`).
-4. **Receiver** enters that code (on `/receive` or in the Android prompt). Only then does the upload proceed.
+4. **Receiver** enters that code (on `/receive`, in the Android **Incoming transfer** prompt, or via the local portal flow). Only then does the upload proceed.
+
+**Android → Android (gateway):** On the sending phone, open **Send**, tap **Refresh**, pick a device under **Android phones**, then send. The receiving phone must have gateway enabled in Settings and **Require password** on if you want a code step.
+
+**Android → Android (same Wi‑Fi):** On the Send tab, use **Send on same Wi‑Fi** with the receiver’s portal URL from their Settings. Password protection on the receiver uses the same code flow.
 
 If the toggle is off, transfers work as before with no code step.
 

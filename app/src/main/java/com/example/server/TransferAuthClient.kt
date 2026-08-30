@@ -17,6 +17,49 @@ data class TransferAuthSession(
 object TransferAuthClient {
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
+    data class PendingAuth(
+        val sessionId: String,
+        val senderLabel: String?
+    )
+
+    fun fetchGatewayPending(client: OkHttpClient, baseUrl: String, deviceId: String): PendingAuth? {
+        val request = Request.Builder()
+            .url("${baseUrl.removeSuffix("/")}/api/transfer/pending/${deviceId}")
+            .get()
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return null
+            val json = JSONObject(response.body?.string().orEmpty().ifEmpty { "{}" })
+            val pending = json.optJSONArray("pending") ?: return null
+            if (pending.length() == 0) return null
+            val first = pending.getJSONObject(0)
+            val sessionId = first.optString("sessionId").ifEmpty { return null }
+            return PendingAuth(
+                sessionId = sessionId,
+                senderLabel = first.optString("senderLabel").ifEmpty { null }
+            )
+        }
+    }
+
+    fun fetchLocalPending(client: OkHttpClient, baseUrl: String): PendingAuth? {
+        val request = Request.Builder()
+            .url("${baseUrl.removeSuffix("/")}/api/transfer/pending")
+            .get()
+            .build()
+        client.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) return null
+            val json = JSONObject(response.body?.string().orEmpty().ifEmpty { "{}" })
+            val pending = json.optJSONArray("pending") ?: return null
+            if (pending.length() == 0) return null
+            val first = pending.getJSONObject(0)
+            val sessionId = first.optString("sessionId").ifEmpty { return null }
+            return PendingAuth(
+                sessionId = sessionId,
+                senderLabel = first.optString("senderLabel").ifEmpty { null }
+            )
+        }
+    }
+
     fun requestAuth(
         client: OkHttpClient,
         baseUrl: String,
@@ -37,11 +80,15 @@ object TransferAuthClient {
             if (!response.isSuccessful) {
                 throw IOException(json.optString("error", "Authorization request failed (${response.code})"))
             }
+            val pin = json.optString("pin").ifEmpty { null }
+            val uploadToken = json.optString("uploadToken").ifEmpty { null }
+            val passwordRequired = json.optBoolean("passwordRequired", false) ||
+                (!pin.isNullOrBlank() && uploadToken.isNullOrBlank())
             return TransferAuthSession(
                 sessionId = json.getString("sessionId"),
-                uploadToken = json.optString("uploadToken").ifEmpty { "" },
-                pin = json.optString("pin").ifEmpty { null },
-                passwordRequired = json.optBoolean("passwordRequired", false)
+                uploadToken = uploadToken.orEmpty(),
+                pin = pin,
+                passwordRequired = passwordRequired
             )
         }
     }

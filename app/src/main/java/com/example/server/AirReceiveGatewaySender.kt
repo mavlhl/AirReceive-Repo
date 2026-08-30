@@ -17,7 +17,8 @@ import java.util.concurrent.TimeUnit
 data class GatewayReceiverDevice(
     val id: String,
     val displayName: String,
-    val passwordProtection: Boolean = false
+    val passwordProtection: Boolean = false,
+    val role: String = "receiver"
 )
 
 class AirReceiveGatewaySender(
@@ -117,15 +118,21 @@ class AirReceiveGatewaySender(
         }
     }
 
-    fun fetchOnlineReceivers(): List<GatewayReceiverDevice> {
-        val url = "${gatewayBaseUrl()}/api/devices?role=receiver"
+    fun fetchOnlineReceivers(): List<GatewayReceiverDevice> =
+        fetchDevicesByRole("receiver", "receivers")
+
+    fun fetchOnlinePhones(): List<GatewayReceiverDevice> =
+        fetchDevicesByRole("phone", "phones")
+
+    private fun fetchDevicesByRole(role: String, jsonKey: String): List<GatewayReceiverDevice> {
+        val url = "${gatewayBaseUrl()}/api/devices?role=$role"
         val request = Request.Builder().url(url).get().build()
         return try {
             client.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) return emptyList()
                 val bodyText = response.body?.string().orEmpty()
                 val json = JSONObject(bodyText)
-                val receivers = json.optJSONArray("receivers") ?: JSONArray()
+                val receivers = json.optJSONArray(jsonKey) ?: JSONArray()
                 buildList {
                     for (i in 0 until receivers.length()) {
                         val item = receivers.getJSONObject(i)
@@ -133,14 +140,15 @@ class AirReceiveGatewaySender(
                             GatewayReceiverDevice(
                                 id = item.getString("id"),
                                 displayName = item.optString("displayName", "Device"),
-                                passwordProtection = item.optBoolean("passwordProtection", false)
+                                passwordProtection = item.optBoolean("passwordProtection", false),
+                                role = role
                             )
                         )
                     }
                 }
             }
         } catch (e: Exception) {
-            Log.e("AirReceiveGatewaySender", "Failed to fetch receivers", e)
+            Log.e("AirReceiveGatewaySender", "Failed to fetch $role devices", e)
             emptyList()
         }
     }
@@ -178,6 +186,7 @@ class AirReceiveGatewaySender(
     fun uploadBatches(
         uris: List<Uri>,
         targetDeviceId: String? = null,
+        uploadTarget: String = "receiver",
         sessionId: String? = null,
         uploadToken: String? = null,
         onTransferStarted: (label: String, totalSize: Long) -> Unit,
@@ -217,6 +226,7 @@ class AirReceiveGatewaySender(
             uploadBatch(
                 uris = chunk,
                 targetDeviceId = targetDeviceId,
+                uploadTarget = uploadTarget,
                 sessionId = sessionId,
                 uploadToken = uploadToken,
                 onTransferStarted = { _, _ -> },
@@ -259,6 +269,7 @@ class AirReceiveGatewaySender(
     fun uploadBatch(
         uris: List<Uri>,
         targetDeviceId: String? = null,
+        uploadTarget: String = "receiver",
         sessionId: String? = null,
         uploadToken: String? = null,
         onTransferStarted: (label: String, totalSize: Long) -> Unit,
@@ -283,8 +294,9 @@ class AirReceiveGatewaySender(
         onTransferStarted(label, if (totalBytes > 0) totalBytes else uris.size.toLong())
 
         val progressCounter = longArrayOf(0L)
+        val target = if (uploadTarget == "phone") "phone" else "receiver"
         val multipart = MultipartBody.Builder().setType(MultipartBody.FORM)
-            .addFormDataPart("target", "receiver")
+            .addFormDataPart("target", target)
         if (!targetDeviceId.isNullOrBlank()) {
             multipart.addFormDataPart("targetDeviceId", targetDeviceId)
         }
@@ -322,10 +334,16 @@ class AirReceiveGatewaySender(
             multipart.addFormDataPart("files", fileName, fileBody)
         }
 
-        val request = Request.Builder()
+        val requestBuilder = Request.Builder()
             .url(buildBatchUploadUrl())
             .post(multipart.build())
-            .build()
+        if (!sessionId.isNullOrBlank()) {
+            requestBuilder.header("X-Session-Id", sessionId)
+        }
+        if (!uploadToken.isNullOrBlank()) {
+            requestBuilder.header("X-Upload-Token", uploadToken)
+        }
+        val request = requestBuilder.build()
 
         try {
             client.newCall(request).execute().use { response ->
@@ -352,14 +370,17 @@ class AirReceiveGatewaySender(
                     onTransferFailed("Invalid server response")
                     return
                 }
-                if (json.optBoolean("receiverRelayed", false)) {
+                if (json.optBoolean("receiverRelayed", false) || json.optBoolean("phoneRelayed", false)) {
                     val count = json.optInt("count", uris.size)
-                    Log.d("AirReceiveGatewaySender", "Batch relayed to receiver: $count file(s)")
+                    Log.d("AirReceiveGatewaySender", "Batch relayed to $target: $count file(s)")
                     onTransferCompleted(count)
                 } else {
-                    onTransferFailed(
+                    val hint = if (target == "phone") {
+                        "No Android receiver connected. Open AirReceive on the target phone, enable gateway in Settings, and keep the app in the foreground."
+                    } else {
                         "No receive page connected. Open ${buildReceivePageUrl()} on the target device first."
-                    )
+                    }
+                    onTransferFailed(hint)
                 }
             }
         } catch (e: UnknownHostException) {

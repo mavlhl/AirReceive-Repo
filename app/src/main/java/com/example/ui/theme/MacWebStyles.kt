@@ -59,7 +59,7 @@ object MacWebStyles {
         (function(){try{var k='airreceive-theme';var t=localStorage.getItem(k);var d=t?t==='dark':window.matchMedia('(prefers-color-scheme: dark)').matches;document.documentElement.setAttribute('data-theme',d?'dark':'light');var btn=document.querySelector('.theme-toggle-portal');if(btn)btn.textContent=d?'☀️':'🌙';window.__toggleAirReceiveTheme=function(){var n=document.documentElement.getAttribute('data-theme')==='dark'?'light':'dark';document.documentElement.setAttribute('data-theme',n);localStorage.setItem(k,n);if(btn)btn.textContent=n==='dark'?'☀️':'🌙';};}catch(e){}})();
         """
 
-    /** Matches ic_launcher_foreground / ic_app_logo — blue circle, signal arcs, receive arrow. */
+    /** Matches ic_launcher_foreground — blue circle, signal arcs, receive arrow. */
     const val LOGO_SVG =
         """
         <svg class="airreceive-logo" viewBox="0 0 108 108" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
