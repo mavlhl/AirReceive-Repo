@@ -655,6 +655,33 @@ app.get('/download/:id', (req, res) => {
   });
 });
 
+function gatewayBatchUtilsJs() {
+  return `
+    const MAX_BATCH_FILES = ${MAX_BATCH_FILES};
+    const MAX_BATCH_BYTES = ${MAX_BATCH_BYTES};
+    function chunkFiles(files) {
+      const chunks = [];
+      let current = [];
+      let currentBytes = 0;
+      for (const file of files) {
+        const wouldExceed = current.length > 0 && (
+          current.length >= MAX_BATCH_FILES ||
+          (file.size > 0 && currentBytes + file.size > MAX_BATCH_BYTES)
+        );
+        if (wouldExceed) {
+          chunks.push(current);
+          current = [];
+          currentBytes = 0;
+        }
+        current.push(file);
+        if (file.size > 0) currentBytes += file.size;
+      }
+      if (current.length) chunks.push(current);
+      return chunks;
+    }
+  `;
+}
+
 function transferAuthClientJs() {
   return `
     async function requestTransferAuth(targetDeviceId, senderLabel) {
@@ -1363,7 +1390,7 @@ app.get('/to-android', (req, res) => {
       </div>
 
       <h1>Send to Android</h1>
-      <p class="tagline">Upload a photo from this browser to your Android phone</p>
+      <p class="tagline">Upload photos from this browser to your Android phone</p>
 
       <div class="status-badge" id="statusBadge">
         <span class="dot"></span>
@@ -1378,11 +1405,10 @@ app.get('/to-android', (req, res) => {
 
       <div class="drop-zone disabled" id="dropZone">
         <div class="drop-zone-text">
-          <strong>Select a Photo or Drag & Drop</strong>
-          <span>tap anywhere to browse JPEG, PNG, or webp</span>
+          <strong id="dropZoneTitle">Select photos or drag &amp; drop</strong>
+          <span>Any number of images — uploaded in batches of up to ${MAX_BATCH_FILES} files or 100 MB each.</span>
         </div>
-        <input type="file" id="fileInput" class="file-input" accept="image/*" />
-        <img id="imagePreview" class="preview-image" alt="Upload preview" />
+        <input type="file" id="fileInput" class="file-input" accept="image/*" multiple />
       </div>
 
       <div class="progress-container" id="progressContainer">
@@ -1402,7 +1428,7 @@ app.get('/to-android', (req, res) => {
       </div>
 
       <div class="toast toast-success" id="successToast">
-        🎉 Photo successfully transferred to your Android device!
+        Photos successfully transferred to your Android device!
       </div>
       <div class="toast toast-error" id="errorToast">
         ❌ Transfer failed. Please try again.
@@ -1432,9 +1458,10 @@ app.get('/to-android', (req, res) => {
 
   <script>
     ${transferAuthClientJs()}
+    ${gatewayBatchUtilsJs()}
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
-    const imagePreview = document.getElementById('imagePreview');
+    const dropZoneTitle = document.getElementById('dropZoneTitle');
     const progressContainer = document.getElementById('progressContainer');
     const progressBar = document.getElementById('progressBar');
     const percentText = document.getElementById('percentText');
@@ -1451,11 +1478,12 @@ app.get('/to-android', (req, res) => {
     const pinWaitText = document.getElementById('pinWaitText');
 
     let selectedPhoneId = null;
+    let isUploading = false;
 
     urlPlaceholder.textContent = window.location.origin;
 
     function updateDropZoneEnabled() {
-      dropZone.classList.toggle('disabled', !selectedPhoneId);
+      dropZone.classList.toggle('disabled', !selectedPhoneId || isUploading);
     }
 
     async function refreshPhones() {
@@ -1503,13 +1531,12 @@ app.get('/to-android', (req, res) => {
     refreshPhones();
 
     dropZone.addEventListener('click', () => {
-      if (selectedPhoneId) fileInput.click();
+      if (selectedPhoneId && !isUploading) fileInput.click();
     });
 
-    // File drag effects
     dropZone.addEventListener('dragover', (e) => {
       e.preventDefault();
-      dropZone.classList.add('drag-over');
+      if (!isUploading) dropZone.classList.add('drag-over');
     });
 
     ['dragleave', 'dragend', 'drop'].forEach(event => {
@@ -1519,41 +1546,43 @@ app.get('/to-android', (req, res) => {
     dropZone.addEventListener('drop', (e) => {
       e.preventDefault();
       if (e.dataTransfer.files.length) {
-        handleFileSelect(e.dataTransfer.files[0]);
+        handleFilesSelect(Array.from(e.dataTransfer.files));
       }
     });
 
-    fileInput.addEventListener('change', (e) => {
+    fileInput.addEventListener('change', () => {
       if (fileInput.files.length) {
-        handleFileSelect(fileInput.files[0]);
+        handleFilesSelect(Array.from(fileInput.files));
+        fileInput.value = '';
       }
     });
 
-    function handleFileSelect(file) {
+    function handleFilesSelect(files) {
       if (!selectedPhoneId) {
         showError('Select an Android device first.');
         return;
       }
-      if (!file.type.startsWith('image/')) {
-        showError('Only image files are supported in standard view mode.');
+      if (isUploading) return;
+      const images = files.filter((f) => f.type.startsWith('image/'));
+      if (images.length === 0) {
+        showError('Only image files are supported.');
         return;
       }
-
-      // Show preview
-      const reader = new FileReader();
-      reader.onload = (e) => {
-        imagePreview.src = e.target.result;
-        imagePreview.style.display = 'block';
-      };
-      reader.readAsDataURL(file);
-
-      // Start upload automatically
-      uploadFile(file);
+      if (images.length < files.length && images.length > 0) {
+        console.warn('Skipped ' + (files.length - images.length) + ' non-image file(s).');
+      }
+      dropZoneTitle.textContent = images.length + ' photo(s) selected — uploading...';
+      uploadFiles(images);
     }
 
-    async function uploadFile(file) {
+    async function uploadFiles(files) {
       hideToasts();
       pinBox.style.display = 'none';
+      isUploading = true;
+      updateDropZoneEnabled();
+
+      const chunks = chunkFiles(files);
+      let sentTotal = 0;
 
       try {
         const auth = await ensureTransferAuth(
@@ -1563,86 +1592,64 @@ app.get('/to-android', (req, res) => {
             pinBox.style.display = 'block';
             pinDisplay.textContent = pin;
             fileTransferName.textContent = 'Waiting for receiver to enter code...';
+            progressContainer.style.display = 'block';
+            progressBar.style.width = '0%';
+            percentText.textContent = '';
           },
           () => { pinWaitText.textContent = 'Still waiting for receiver...'; }
         );
 
-      progressContainer.style.display = 'block';
-      fileTransferName.textContent = file.name;
-      progressBar.style.width = '0%';
-      percentText.textContent = '0%';
+        progressContainer.style.display = 'block';
 
-      const formData = new FormData();
-      formData.append('file', file);
-      formData.append('target', 'phone');
-      formData.append('targetDeviceId', selectedPhoneId);
-      formData.append('sessionId', auth.sessionId);
-      formData.append('uploadToken', auth.uploadToken);
+        for (let i = 0; i < chunks.length; i++) {
+          const chunk = chunks[i];
+          const batchLabel = chunks.length > 1
+            ? 'Uploading batch ' + (i + 1) + ' of ' + chunks.length + ' (' + chunk.length + ' file(s))...'
+            : 'Uploading ' + chunk.length + ' file(s)...';
+          fileTransferName.textContent = batchLabel;
+          progressBar.style.width = '0%';
+          percentText.textContent = '';
 
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', '/upload', true);
+          const formData = new FormData();
+          formData.append('target', 'phone');
+          formData.append('targetDeviceId', selectedPhoneId);
+          formData.append('sessionId', auth.sessionId);
+          formData.append('uploadToken', auth.uploadToken);
+          chunk.forEach((f) => formData.append('files', f));
 
-      // Track progress
-      xhr.upload.addEventListener('progress', (e) => {
-        if (e.lengthComputable) {
-          const percent = Math.round((e.loaded / e.total) * 100);
-          progressBar.style.width = percent + '%';
-          percentText.textContent = percent + '%';
+          const res = await fetch('/upload/batch', { method: 'POST', body: formData });
+          const data = await res.json().catch(() => ({}));
+
+          if (!res.ok) {
+            showError(data.error || 'Upload failed. Is the phone still online?');
+            return;
+          }
+          if (data.phoneRelayed === false) {
+            showError('Upload reached the server, but the phone is not connected. Refresh the device list and try again.');
+            return;
+          }
+          sentTotal += data.count || chunk.length;
+          progressBar.style.width = '100%';
+          percentText.textContent = '100%';
         }
-      });
 
-      xhr.onload = () => {
-        progressContainer.style.display = 'none';
-        pinBox.style.display = 'none';
-        
-        if (xhr.status === 200) {
-          try {
-            const result = JSON.parse(xhr.responseText);
-            if (result.phoneRelayed === false) {
-              showError('Upload reached the server, but the phone is not connected. Refresh the device list and try again.');
-              return;
-            }
-          } catch (e) { /* legacy response */ }
-          showSuccess();
-        } else if (xhr.status === 404) {
-          let err = 'Selected phone is offline.';
-          try {
-            const j = JSON.parse(xhr.responseText);
-            if (j.error) err = j.error;
-          } catch (e) { /* ignore */ }
-          showError(err + ' Refresh the list and pick another device.');
-        } else if (xhr.status === 403) {
-          let err = 'Transfer not authorized.';
-          try {
-            const j = JSON.parse(xhr.responseText);
-            if (j.error) err = j.error;
-          } catch (e) { /* ignore */ }
-          showError(err);
-        } else {
-          showError('Server rejected file upload: ' + xhr.responseText);
-        }
-      };
-
-      xhr.onerror = () => {
-        progressContainer.style.display = 'none';
-        pinBox.style.display = 'none';
-        showError('Network transfer failure occurred. Check your server.');
-      };
-
-      xhr.send(formData);
+        showSuccess('Sent ' + sentTotal + ' photo(s) successfully.');
+        dropZoneTitle.textContent = 'Select photos or drag & drop';
       } catch (e) {
+        showError(e.message || 'Transfer failed.');
+      } finally {
         progressContainer.style.display = 'none';
         pinBox.style.display = 'none';
-        showError(e.message || 'Authorization failed.');
+        isUploading = false;
+        updateDropZoneEnabled();
       }
     }
 
-    function showSuccess() {
+    function showSuccess(msg) {
+      successToast.textContent = msg || 'Photos successfully transferred to your Android device!';
       successToast.style.display = 'block';
       setTimeout(() => {
         successToast.style.display = 'none';
-        imagePreview.style.display = 'none';
-        imagePreview.src = '';
       }, 6000);
     }
 
@@ -1766,8 +1773,7 @@ app.get('/send', (req, res) => {
   </div>
   <script>
     ${transferAuthClientJs()}
-    const MAX_BATCH_FILES = ${MAX_BATCH_FILES};
-    const MAX_BATCH_BYTES = ${MAX_BATCH_BYTES};
+    ${gatewayBatchUtilsJs()}
     const SENDER_NAME_KEY = 'airreceive_sender_name';
     const deviceListEl = document.getElementById('deviceList');
     const dropZone = document.getElementById('dropZone');
@@ -1857,27 +1863,6 @@ app.get('/send', (req, res) => {
         updateSendEnabled();
       }
     });
-
-    function chunkFiles(files) {
-      const chunks = [];
-      let current = [];
-      let currentBytes = 0;
-      for (const file of files) {
-        const wouldExceed = current.length > 0 && (
-          current.length >= MAX_BATCH_FILES ||
-          (file.size > 0 && currentBytes + file.size > MAX_BATCH_BYTES)
-        );
-        if (wouldExceed) {
-          chunks.push(current);
-          current = [];
-          currentBytes = 0;
-        }
-        current.push(file);
-        if (file.size > 0) currentBytes += file.size;
-      }
-      if (current.length) chunks.push(current);
-      return chunks;
-    }
 
     sendBtn.addEventListener('click', async () => {
       if (!selectedDeviceId || pendingFiles.length === 0) return;
